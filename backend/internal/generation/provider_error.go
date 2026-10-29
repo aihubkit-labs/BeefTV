@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"infinite-canvas/backend/internal/beefapi"
+	"infinite-canvas/backend/internal/outbound"
 )
 
 // FailureCategory 是生成失败的稳定机器可读类目。HTTP 状态只作兜底，不能单独当原因。
@@ -282,6 +286,12 @@ var providerCodeCategories = map[string]FailureCategory{
 	"image_reference_upload_failed":        CategoryProviderUnavailable,
 	"reference_media_upload_failed":        CategoryProviderUnavailable,
 	"reference_preupload_failed":           CategoryProviderUnavailable,
+	"upscale_unavailable":                  CategoryProviderUnavailable,
+	"fal_billing_unavailable":              CategoryProviderUnavailable,
+	"invalid_upscale_source":               CategoryInvalidParams,
+	"invalid_upscale_parameters":           CategoryInvalidParams,
+	"invalid_upscale_model":                CategoryModelMissing,
+	"invalid_upscale_channel":              CategoryModelMissing,
 	"upstream_rejected":                    CategoryUnknown,
 	"upstream_error":                       CategoryUnknown,
 }
@@ -449,6 +459,18 @@ func ClassifyError(err error) Failure {
 	if errors.As(err, &unknown) {
 		return normalizeFailure(Failure{Category: CategorySubmissionUncertain, Uncertain: true, Retryable: false})
 	}
+	var managed *beefapi.MediaTaskError
+	if errors.As(err, &managed) {
+		category := FailureCategory(managed.Category)
+		if _, supported := categoryCopies[category]; !supported {
+			category = CategoryUnknown
+		}
+		return normalizeFailure(Failure{Category: category, TaskID: sanitizeDebugID(managed.TaskID), ProviderCode: sanitizeProviderCode(managed.Code), ProviderMessage: DiagnosticSummary(managed.Message), Structured: true, FromCode: true})
+	}
+	var protocolPreparation ProtocolPreparationError
+	if errors.As(err, &protocolPreparation) {
+		return normalizeFailure(Failure{Category: CategoryModelMissing, Reason: protocolPreparation.Error(), Action: "本次请求尚未提交，请检查所选模型的插件是否已安装、启用并支持该生成类型"})
+	}
 	if errors.Is(err, context.Canceled) {
 		return normalizeFailure(Failure{Category: CategoryCancelled})
 	}
@@ -521,6 +543,13 @@ func ClassifyError(err error) Failure {
 		failure.Reason = ""
 		failure.Action = ""
 		return normalizeFailure(failure)
+	}
+	var dns *outbound.DNSResolutionError
+	if errors.As(err, &dns) {
+		failure := normalizeFailure(Failure{Category: CategoryNetwork, Reason: "模型服务域名解析失败", Action: "请检查网络；已提交的任务请继续查询原任务，不要重新生成"})
+		var networkError net.Error
+		failure.Retryable = errors.As(dns, &networkError) && (networkError.Timeout() || networkError.Temporary())
+		return failure
 	}
 	var httpErr HTTPError
 	if errors.As(err, &httpErr) {
@@ -1130,6 +1159,13 @@ func referenceDurationCopy(text string) (categoryCopy, bool) {
 	if copy, ok := referenceAudioCopy(text, false); ok {
 		return copy, true
 	}
+	// 当前提示写法：哪一项、现在多少、要改到多少，动作沿用后端给出的那句。
+	if m := regexp.MustCompile(`^((?:第 \d+ 段)?(?:参考)?(?:音频|视频)(?:「[^」]*」)?)时长为 (\d+(?:\.\d+)?) 秒[，。]需要改到 ([^；;]+)[；;](.+?)。?$`).FindStringSubmatch(text); len(m) == 5 {
+		return categoryCopy{Reason: fmt.Sprintf("%s时长为 %s 秒", m[1], m[2]), Action: fmt.Sprintf("需要改到 %s；%s", m[3], m[4])}, true
+	}
+	if m := regexp.MustCompile(`^输出时长为 ([\d.]+) 秒[，。]当前模型只支持 ([^；;]+)[；;](.+?)。?$`).FindStringSubmatch(text); len(m) == 4 {
+		return categoryCopy{Reason: fmt.Sprintf("输出时长为 %s 秒", m[1]), Action: fmt.Sprintf("当前模型只支持 %s；%s", m[2], m[3])}, true
+	}
 	if m := regexp.MustCompile(`^第 (\d+) 段参考(音频|视频)时长为 (\d+(?:\.\d+)?) 秒[，。]需要 (\d+(?:\.\d+)?)–(\d+(?:\.\d+)?) 秒`).FindStringSubmatch(text); len(m) == 6 {
 		return categoryCopy{Reason: fmt.Sprintf("第 %s 段参考%s时长为 %s 秒", m[1], m[2], m[3]), Action: fmt.Sprintf("需要 %s–%s 秒；请裁剪或更换这段素材后再提交", m[4], m[5])}, true
 	}
@@ -1147,6 +1183,21 @@ func specializeMediaConstraints(failure *Failure, fields extractedFields) {
 		return
 	}
 	message := promptEchoPattern.ReplaceAllString(fields.Message, "")
+	if strings.EqualFold(fields.Code, "invalid_upscale_source") {
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "video") {
+			failure.Category = CategoryInvalidParams
+			failure.Reason = "超分视频素材不符合要求"
+			failure.Action = "请使用 5 分钟以内、200MB 以内的有效 MP4/MOV 视频后重试"
+			return
+		}
+		if strings.Contains(lower, "image") {
+			failure.Category = CategoryInvalidParams
+			failure.Reason = "超分图片素材不符合要求"
+			failure.Action = "请使用 30MB 以内、像素不超过 3200 万的 JPEG/PNG/WebP 图片后重试"
+			return
+		}
+	}
 	if failure.Category == CategoryInvalidParams || failure.Category == CategoryUnknown {
 		if copy, ok := persistedTaskConstraintCopy(message); ok {
 			failure.Category, failure.Reason, failure.Action = CategoryInvalidParams, copy.Reason, copy.Action

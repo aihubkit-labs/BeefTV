@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { isolateCopiedNodeMetadata, nextCopiedNodeTitle } from "@/lib/canvas/canvas-node-copy";
 import { rebaseCanvasDocumentThreeWay, settleInFlightGenerationOverlay } from "@/lib/canvas/canvas-document-rebase";
-import { clearInPlaceMediaOutputMetadata } from "@/lib/canvas/canvas-project-generation";
+import { resetGenerationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
 import { buildNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
 import { canvasGenerationTaskNodes } from "@/pages/canvas/canvas-generation-failure";
 import type { GenerationTask } from "@/services/api/task-center";
@@ -34,6 +34,21 @@ describe("canvas node copy title", () => {
 });
 
 describe("canvas generation copy metadata", () => {
+    test.each(["submitting", "unknown", "accepted", "rejected"] as const)("复制 %s 节点时同时隔离任务身份与提交状态", (state) => {
+        const source: CanvasNodeData = {
+            id: "source", type: CanvasNodeType.Video, title: "镜头", position: { x: 0, y: 0 }, width: 340, height: 240,
+            metadata: { status: "loading", taskClientOperationId: "canvas:original", generationSubmissionState: state, composerContent: "保留提示词", generationPreflightError: "原任务尚未确认" },
+        };
+        const metadata = isolateCopiedNodeMetadata(source, new Map([[source.id, "copy"]]));
+        expect(metadata.taskClientOperationId).toBeUndefined();
+        expect(metadata.generationSubmissionState).toBeUndefined();
+        expect(metadata.generationPreflightError).toBeUndefined();
+        expect(metadata.status).toBe("idle");
+        expect(metadata.composerContent).toBe("保留提示词");
+        expect(source.metadata?.generationSubmissionState).toBe(state);
+        expect(source.metadata?.taskClientOperationId).toBe("canvas:original");
+    });
+
     test.each([CanvasNodeType.Image, CanvasNodeType.Video, CanvasNodeType.Audio])("%s 副本不继承原节点的生成提交标记", (type) => {
         const source: CanvasNodeData = {
             id: "source", type, title: "结果", position: { x: 0, y: 0 }, width: 340, height: 240,
@@ -99,7 +114,7 @@ describe("canvas generation copy metadata", () => {
         expect(context.referenceImages.map((image) => image.id)).toEqual([reference.id]);
     });
 
-    test("复制视频节点原地生成时清理旧媒体字段，确保绑定新任务结果不会冲突保留原视频", () => {
+    test("复制视频保留旧媒体等待新结果，新任务绑定后仍采用新视频", () => {
         const source: CanvasNodeData = {
             id: "video-source",
             type: CanvasNodeType.Video,
@@ -132,11 +147,12 @@ describe("canvas generation copy metadata", () => {
             metadata: copiedMetadata,
         };
 
-        const inPlaceLoadingMetadata = clearInPlaceMediaOutputMetadata(copiedNode.metadata, "loading");
-        expect(Object.prototype.hasOwnProperty.call(inPlaceLoadingMetadata, "content")).toBe(false);
-        expect(Object.prototype.hasOwnProperty.call(inPlaceLoadingMetadata, "storageKey")).toBe(false);
-        expect(Object.prototype.hasOwnProperty.call(inPlaceLoadingMetadata, "assetId")).toBe(false);
-        expect(Object.prototype.hasOwnProperty.call(inPlaceLoadingMetadata, "videoPreview")).toBe(false);
+        const inPlaceLoadingMetadata = resetGenerationTaskMetadata(copiedNode.metadata, "loading");
+        expect(inPlaceLoadingMetadata.content).toBe(source.metadata!.content);
+        expect(inPlaceLoadingMetadata.storageKey).toBe(source.metadata!.storageKey);
+        expect(inPlaceLoadingMetadata.assetId).toBe(source.metadata!.assetId);
+        expect(inPlaceLoadingMetadata.videoPreview).toEqual(source.metadata!.videoPreview);
+        expect(inPlaceLoadingMetadata.taskId).toBeUndefined();
         expect(inPlaceLoadingMetadata.copiedFromNodeId).toBe("video-source");
         expect(inPlaceLoadingMetadata.generationResultPlacement).toBe("replace-node");
         expect(inPlaceLoadingMetadata.videoStartFrameNodeId).toBe("ref-start");
@@ -199,6 +215,7 @@ describe("canvas generation copy metadata", () => {
                     naturalWidth: 720,
                     naturalHeight: 1280,
                     durationMs: 5000,
+                    videoPreview: undefined,
                 },
             },
         ], 152);

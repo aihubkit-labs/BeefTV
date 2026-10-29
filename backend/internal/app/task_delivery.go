@@ -15,6 +15,7 @@ import (
 	"time"
 
 	localasset "infinite-canvas/backend/internal/asset"
+	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/outbound"
@@ -68,11 +69,18 @@ func (s *Service) attachTaskDelivery(task *model.Task) {
 	if task == nil {
 		return
 	}
+	if task.Status == model.TaskStatusFailed && task.ProviderRequestID == "" {
+		s.hydrateTaskProviderRequestID(task)
+	}
 	stored, loadErr := s.generationDeliverer().LoadedOutputs(task.ID)
-	proj := taskdelivery.Project(*task, stored, loadErr, persistedFailureBlocksRetry(task.Error, task.Stage))
+	facts := s.taskOutcomeFacts([]model.Task{*task})
+	proj := taskdelivery.ProjectWithFacts(*task, stored, loadErr, persistedFailureBlocksRetry(task.Error, task.Stage), facts[task.ID])
+	task.Outcome = &proj.Outcome
 	task.Outputs = modelTaskOutputs(proj.Outputs)
 	task.ResultState = proj.ResultState
+	task.Stage = proj.Stage
 	task.Delivery = s.deliveryProgressRegistry().forTask(task.ID)
+	task.ReferenceProgress = s.referenceProgressForTask(task.ID)
 }
 
 func (s *Service) attachTaskSummaryDeliveries(tasks []model.Task, summaries []TaskSummary) {
@@ -86,6 +94,7 @@ func (s *Service) attachTaskSummaryDeliveries(tasks []model.Task, summaries []Ta
 		taskByID[task.ID] = task
 	}
 	byTask, decodeErrs, loadErr := s.generationDeliverer().LoadedOutputsForTasks(ids)
+	facts := s.taskOutcomeFacts(tasks)
 	for index := range summaries {
 		task, ok := taskByID[summaries[index].ID]
 		if !ok {
@@ -95,10 +104,13 @@ func (s *Service) attachTaskSummaryDeliveries(tasks []model.Task, summaries []Ta
 		if taskLoadErr == nil {
 			taskLoadErr = decodeErrs[task.ID]
 		}
-		proj := taskdelivery.Project(task, byTask[task.ID], taskLoadErr, persistedFailureBlocksRetry(task.Error, task.Stage))
+		proj := taskdelivery.ProjectWithFacts(task, byTask[task.ID], taskLoadErr, persistedFailureBlocksRetry(task.Error, task.Stage), facts[task.ID])
+		summaries[index].Outcome = &proj.Outcome
 		summaries[index].Outputs = proj.Outputs
 		summaries[index].ResultState = proj.ResultState
+		summaries[index].Stage = proj.Stage
 		summaries[index].Delivery = s.deliveryProgressRegistry().forTask(task.ID)
+		summaries[index].ReferenceProgress = s.referenceProgressForTask(task.ID)
 	}
 }
 
@@ -120,9 +132,12 @@ func (s *Service) startGenerationDeliveryRecovery(context.Context) {
 			if ctx.Err() != nil || s.IsDraining() {
 				return
 			}
+			s.startImageRecoveryPass(ctx)
+			s.startVideoRecoveryPass(ctx)
 			if err := s.RecoverIncompleteGenerationDeliveries(0); err != nil {
 				log.Printf("generation delivery recovery paused: worker_id=%s error=%v", s.workerID, err)
 			}
+			s.recoverAssistantContinuations(ctx)
 		}
 		recoverOnce()
 		ticker := time.NewTicker(generationDeliveryRecoveryInterval)
@@ -243,10 +258,10 @@ func (s generationDeliveryStore) CommitOwned(item taskdelivery.OwnedDelivery) er
 	})); err != nil {
 		return err
 	}
-	// A stop can race with the final local commit after all network bytes arrived.
-	// Completing every output wins over a now-unnecessary delivery pause.
+	// Completing every output clears both a resumed download and a concurrent
+	// pause. Leave unrelated generation stages untouched.
 	task, err := s.repo.Task(item.Result.TaskID)
-	if err != nil || (!deliveryPaused(task.Stage) && !strings.Contains(task.InputJSON, `"imageDeliveryCipher"`)) {
+	if err != nil || (!deliveryPaused(task.Stage) && task.Stage != "正在取回结果" && !strings.Contains(task.InputJSON, `"imageDeliveryCipher"`)) {
 		return err
 	}
 	rows, err := s.repo.GenerationOutputResults(task.ID)
@@ -281,7 +296,8 @@ func mapDeliveryStoreErr(err error) error {
 }
 
 type generationDeliveryMediaAdapter struct {
-	service *Service
+	service                      *Service
+	allowManagedMediaHTTPForTest bool
 }
 
 func (a generationDeliveryMediaAdapter) PersistRemoteArtifact(userID, mediaType, artifactURL, identity string) (*model.Resource, error) {
@@ -330,8 +346,15 @@ func (a generationDeliveryMediaAdapter) decodeGenerationArtifact(userID, identit
 		if contextErr != nil {
 			return "", nil, "", "", 0, 0, 0, contextErr
 		}
-		defer func() { finish(err == nil) }()
-		if _, urlErr := validateRemoteResourceURL(artifactURL); urlErr != nil {
+		defer func() { finish(err) }()
+		managed, identityErr := a.managedArtifact(userID, identity)
+		if identityErr != nil {
+			return "", nil, "", "", 0, 0, 0, identityErr
+		}
+		if managed && !a.allowManagedMediaHTTPForTest {
+			ctx = outbound.WithPublicHTTPS(ctx)
+		}
+		if _, urlErr := outbound.ValidateOutboundURLContext(ctx, artifactURL); urlErr != nil {
 			return "", nil, "", "", 0, 0, 0, urlErr
 		}
 		policy, policyErr := a.service.RuntimePolicy()
@@ -360,6 +383,11 @@ func (a generationDeliveryMediaAdapter) decodeGenerationArtifact(userID, identit
 			return "", nil, "", "", 0, 0, 0, downloadErr
 		}
 		mimeType, data = result.MimeType, result.Data
+		if kind == "image" {
+			if validationErr := generation.ValidateImageArtifact(data, mimeType); validationErr != nil {
+				return "", nil, "", "", 0, 0, 0, validationErr
+			}
+		}
 		kind = normalizeResourceKind(kind, mimeType)
 		fileName = result.FileName
 		if fileName == "" {
@@ -400,6 +428,9 @@ func (a generationDeliveryMediaAdapter) imageDownloadHeaders(userID, identity, k
 	if err != nil {
 		return nil, err
 	}
+	if managedTaskConnection(*task) {
+		return nil, nil
+	}
 	if strings.TrimSpace(task.InputJSON) == "" {
 		return nil, nil
 	}
@@ -425,6 +456,9 @@ func (a generationDeliveryMediaAdapter) imageDownloadHeaders(userID, identity, k
 		if err := json.Unmarshal([]byte(configJSON), &input.Config); err != nil {
 			return nil, err
 		}
+	}
+	if input.Config.CredentialRef == beefapi.CredentialRef || input.Config.ChannelID == beefapi.ChannelID {
+		return nil, nil
 	}
 	if input.Config.BaseURL == "" && input.Config.ChannelID == "" {
 		return nil, nil
@@ -453,6 +487,53 @@ func (a generationDeliveryMediaAdapter) imageDownloadHeaders(userID, identity, k
 	}
 	outbound.ApplyOutboundHeaders(req, config.Headers)
 	return req.Header, nil
+}
+
+func (a generationDeliveryMediaAdapter) managedArtifact(userID, identity string) (bool, error) {
+	taskID, _, ok := strings.Cut(identity, ":")
+	if !ok {
+		return false, errors.New("generation artifact identity is incomplete")
+	}
+	task, err := a.service.repo.TaskForUser(userID, taskID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if managedTaskConnection(*task) {
+		return true, nil
+	}
+	var retained struct {
+		Cipher string `json:"imageDeliveryCipher"`
+	}
+	if strings.TrimSpace(task.InputJSON) != "" {
+		if err := json.Unmarshal([]byte(task.InputJSON), &retained); err != nil {
+			return false, err
+		}
+	}
+	if retained.Cipher != "" {
+		plain, err := a.service.decryptSettingSecret(retained.Cipher)
+		if err != nil {
+			return false, err
+		}
+		var config generation.Config
+		if err := json.Unmarshal([]byte(plain), &config); err != nil {
+			return false, err
+		}
+		if config.CredentialRef == beefapi.CredentialRef || config.ChannelID == beefapi.ChannelID {
+			return true, nil
+		}
+	}
+	if attempt, err := a.service.repo.LatestRouteAttempt(task.ID); err == nil && attempt != nil {
+		if attempt.ChannelID == beefapi.ChannelID {
+			return true, nil
+		}
+		if row, err := a.service.repo.ImageSubmission(attempt.ID, task.ID, task.UserID); err == nil && row.QueryCipher != "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // artifactDownloadPartialPath keeps the resumable .part file per delivery

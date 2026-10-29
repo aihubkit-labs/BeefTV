@@ -157,7 +157,7 @@ func (r *Repository) UserStorageUsage(userID string) (UserStorageUsage, error) {
 			(SELECT COUNT(*) FROM canvas_projects WHERE user_id = ?) AS canvas_count,
 			%s AS canvas_bytes,
 			(SELECT COUNT(*) FROM tasks WHERE user_id = ?) AS task_count,
-			(SELECT COALESCE(SUM(length(CAST(COALESCE(prompt, '') AS BLOB)) + length(CAST(COALESCE(input_json, '') AS BLOB)) + length(CAST(COALESCE(result_json, '') AS BLOB)) + length(CAST(COALESCE(text_draft, '') AS BLOB)) + length(CAST(COALESCE(error, '') AS BLOB))), 0) FROM tasks WHERE user_id = ?)
+			(SELECT COALESCE(SUM(length(CAST(COALESCE(prompt, '') AS BLOB)) + length(CAST(COALESCE(input_json, '') AS BLOB)) + length(CAST(COALESCE(workflow_source_cipher, '') AS BLOB)) + length(CAST(COALESCE(result_json, '') AS BLOB)) + length(CAST(COALESCE(text_draft, '') AS BLOB)) + length(CAST(COALESCE(error, '') AS BLOB))), 0) FROM tasks WHERE user_id = ?)
 			+ (SELECT COALESCE(SUM(length(CAST(COALESCE(message, '') AS BLOB)) + length(CAST(COALESCE(payload, '') AS BLOB))), 0) FROM task_logs WHERE user_id = ?)
 			+ (SELECT COALESCE(SUM(length(CAST(COALESCE(url, '') AS BLOB)) + length(CAST(COALESCE(payload, '') AS BLOB))), 0) FROM results WHERE user_id = ?)
 			+ (SELECT COALESCE(SUM(byte_count), 0) FROM task_text_delta WHERE user_id = ?)
@@ -433,7 +433,7 @@ func (r *Repository) SaveTaskCompletion(task *model.Task, expected model.TaskSta
 			Where("id = ? AND status = ?", task.ID, expected).
 			// Completion owns the result, not the worker's routing, lease or
 			// cancellation snapshot, which may have changed during execution.
-			Select("status", "stage", "progress", "result_json", "input_json", "text_draft", "error", "failure_diagnostics", "completed_at", "updated_at").Updates(task)
+			Select("status", "stage", "progress", "result_json", "input_json", "workflow_source_cipher", "text_draft", "error", "failure_diagnostics", "recovery_outcome", "next_poll_at", "completed_at", "updated_at").Updates(task)
 		if updated.Error != nil {
 			return updated.Error
 		}
@@ -560,7 +560,7 @@ func (r *Repository) Tasks(userID string, limit int, projectID string, activeOnl
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
-	query := r.db.Select("id", "project_id", "type", "status", "stage", "progress", "prompt", "operation", "provider", "model", "input_json", "result_json", "error", "failure_diagnostics", "provider_request_id", "provider_cancel_status", "provider_cancel_error", "provider_cancel_attempts", "provider_cancel_requested_at", "provider_cancelled_at", "provider_cancel_next_check_at", "attempts", "started_at", "completed_at", "created_at", "updated_at").
+	query := r.db.Select("id", "user_id", "route_run", "recovery_outcome", "beef_usage_state", "beef_billing_state", "beef_reconcile_deadline", "image_job_id", "project_id", "type", "status", "stage", "progress", "prompt", "operation", "provider", "model", "input_json", "result_json", "error", "failure_diagnostics", "provider_request_id", "provider_cancel_status", "provider_cancel_error", "provider_cancel_attempts", "provider_cancel_requested_at", "provider_cancelled_at", "provider_cancel_next_check_at", "attempts", "started_at", "completed_at", "created_at", "updated_at").
 		Where("user_id = ?", userID)
 	if strings.TrimSpace(projectID) != "" {
 		query = query.Where("project_id = ?", strings.TrimSpace(projectID))
@@ -870,6 +870,15 @@ func (r *Repository) ClaimFailedResourceUpload(userID string, id string) (bool, 
 
 func (r *Repository) DeleteResource(userID string, id string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if tx.Migrator().HasTable(&model.CanvasWorkflowResource{}) {
+			var count int64
+			if err := tx.Model(&model.CanvasWorkflowResource{}).Where("user_id = ? AND resource_id = ?", userID, id).Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return fmt.Errorf("资源仍被工作流模板或运行记录引用")
+			}
+		}
 		var resource model.Resource
 		err := tx.Where("id = ? AND user_id = ?", id, userID).First(&resource).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -2026,11 +2035,10 @@ func (r *Repository) DeleteShotAssetReferenceAndInvalidate(projectID string, sho
 }
 
 func invalidateUnitWorkflowTx(tx *gorm.DB, projectID string, unitID string, fromStepKey string, updatedAt time.Time) error {
-	if strings.TrimSpace(unitID) == "" {
-		return nil
-	}
 	var instances []model.WorkflowInstance
-	if err := tx.Where("project_id = ? AND unit_id = ?", projectID, unitID).Find(&instances).Error; err != nil {
+	// Unit changes also invalidate the project's aggregate approval. Other
+	// units keep their own confirmations and existing task/resource identities.
+	if err := tx.Where("project_id = ? AND (unit_id = ? OR scope = ?)", projectID, unitID, "project").Find(&instances).Error; err != nil {
 		return err
 	}
 	for _, instance := range instances {

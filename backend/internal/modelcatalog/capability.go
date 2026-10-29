@@ -55,6 +55,20 @@ func videoDurationSupported(value *VideoCapabilityConfig) bool {
 }
 
 func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapabilityConfig {
+	if family := providerpreset.SeedreamFamily(modelName); family != "" {
+		modern := family == "pro" || family == "flash"
+		sizes := []string{"2K", "4K"}
+		refs := 14
+		if modern {
+			sizes = []string{"1K", "1.5K", "2K"}
+			refs = 10
+		} else if family == "lite" {
+			sizes = []string{"2K", "3K", "4K"}
+		} else if family == "4.0" {
+			sizes = []string{"1K", "2K", "4K"}
+		}
+		return &ImageCapabilityConfig{References: ImageReferenceConfig{PromptMaxChars: 32000, MaxImages: refs, MaxImageBytes: 30 * 1024 * 1024}, Size: ImageSizeConfig{Parameter: "size", Values: sizes, Default: "2K", AllowCustom: true}, Quality: ImageQualityConfig{Default: "auto"}, TransparentBackground: VideoBooleanConfig{Supported: modern}, ResponseFormat: ImageResponseFormat{Supported: true}, OutputFormat: ParameterSupport{Supported: modern || family == "lite"}, MaxOutputs: 15}
+	}
 	if contract, ok := providerpreset.BeefAPIImageContract(modelName); ok && protocol == "openai-image" {
 		values := make([]string, 0, len(contract.Sizes))
 		for ratio := range contract.Sizes {
@@ -64,11 +78,17 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 			}
 		}
 		sort.Strings(values)
+		presets := make([]ImageSizePreset, 0, len(contract.Presets))
+		for _, preset := range contract.Presets {
+			values = appendUniqueString(values, preset.Ratio)
+			values = appendUniqueString(values, preset.Size)
+			presets = append(presets, ImageSizePreset{Tier: preset.Tier, Ratio: preset.Ratio, Size: preset.Size, Width: preset.Width, Height: preset.Height})
+		}
 		return &ImageCapabilityConfig{
 			References: ImageReferenceConfig{PromptMaxChars: contract.PromptMaxChars, MaxImages: contract.MaxImages, MaxImageBytes: contract.MaxImageBytes},
-			Size:       ImageSizeConfig{Parameter: "size", Values: values, Default: "1:1", AllowCustom: contract.MinSide != contract.MaxSide},
-			Quality:    ImageQualityConfig{Default: "auto"}, MaxOutputs: max(1, contract.FixedOutputs), FixedOutputs: contract.FixedOutputs,
-			ResponseFormat: ParameterSupport{Supported: contract.FixedOutputs > 0},
+			Size:       ImageSizeConfig{Parameter: "size", Values: values, Default: "1:1", AllowCustom: contract.MinSide != contract.MaxSide, Presets: presets},
+			Quality:    ImageQualityConfig{Default: "auto"}, MaxOutputs: max(1, contract.FixedOutputs), FixedOutputs: contract.FixedOutputs, GenerationOutputs: contract.GenerationOutputs,
+			ResponseFormat: ImageResponseFormat{Supported: contract.FixedOutputs > 0},
 		}
 	}
 	image := &ImageCapabilityConfig{
@@ -76,7 +96,7 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		Size:                  ImageSizeConfig{Parameter: "size", Values: defaultImageSizeValues(), Default: "1:1", AllowCustom: true},
 		Quality:               ImageQualityConfig{Supported: true, Values: []string{"auto", "low", "medium", "high"}, Default: "auto"},
 		TransparentBackground: VideoBooleanConfig{Supported: true, Default: false},
-		ResponseFormat:        ParameterSupport{Supported: true},
+		ResponseFormat:        ImageResponseFormat{Supported: true},
 		OutputFormat:          ParameterSupport{Supported: true},
 		MaxOutputs:            15,
 	}
@@ -94,7 +114,7 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		image.Size = ImageSizeConfig{Parameter: "aspect_ratio", Values: []string{"1:1", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2"}, Default: "1:1", AllowCustom: false}
 		image.Quality = ImageQualityConfig{Supported: true, Values: []string{"1k", "2k"}, Default: "2k"}
 		image.TransparentBackground = VideoBooleanConfig{Supported: false, Default: false}
-		image.ResponseFormat = ParameterSupport{Supported: true}
+		image.ResponseFormat = ImageResponseFormat{Supported: true}
 		image.OutputFormat = ParameterSupport{Supported: false}
 		image.MaxOutputs = 1
 	case model.ChannelInterfaceVolcengineArkImage, model.ChannelInterfaceVolcengineArkAgentPlanImage:
@@ -118,6 +138,22 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		image.ResponseFormat.Supported = false
 		image.OutputFormat.Supported = false
 		image.MaxOutputs = 4
+	case "agnes-image":
+		agnesImage25Pro := strings.EqualFold(strings.TrimSpace(modelName), "agnes-image-2.5-pro")
+		values := []string{"auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
+		maxImages := 14
+		if agnesImage25Pro {
+			values = []string{"auto", "1:1", "4:3", "3:4", "16:9", "9:16", "2:3", "3:2", "21:9", "9:21", "4:5", "5:4", "1:4", "4:1", "1:8", "8:1"}
+			maxImages = 9
+		}
+		image.References.MaxImages = maxImages
+		image.References.MaskSupported = false
+		image.Size = ImageSizeConfig{Parameter: "aspect_ratio", Values: values, Default: "auto", AllowCustom: false}
+		image.Quality = ImageQualityConfig{Supported: false, Values: []string{"auto"}, Default: "auto"}
+		image.TransparentBackground = VideoBooleanConfig{Supported: false, Default: false}
+		image.ResponseFormat = ImageResponseFormat{Supported: false}
+		image.OutputFormat = ParameterSupport{Supported: false}
+		image.MaxOutputs = 4
 	}
 	if model.ChannelInterfaceType(protocol) != model.ChannelInterfaceGrokImage && strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "grok-imagine-image") {
 		image.References.MaxImages = 0
@@ -125,7 +161,7 @@ func DefaultImageCapabilityConfig(protocol string, modelName string) *ImageCapab
 		image.Size = ImageSizeConfig{Parameter: "aspect_ratio", Values: []string{"1:1", "3:4", "4:3", "9:16", "16:9", "2:3", "3:2"}, Default: "1:1", AllowCustom: false}
 		image.Quality = ImageQualityConfig{Supported: true, Values: []string{"1k", "2k"}, Default: "2k"}
 		image.TransparentBackground = VideoBooleanConfig{Supported: false, Default: false}
-		image.ResponseFormat = ParameterSupport{Supported: true}
+		image.ResponseFormat = ImageResponseFormat{Supported: true}
 		image.OutputFormat = ParameterSupport{Supported: false}
 		image.MaxOutputs = 1
 	}
@@ -153,9 +189,11 @@ func legacyImageSizeValues() []string {
 func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *ModelCapabilityConfig {
 	// 文本模型是否支持视觉输入不能从协议或模型名可靠推断，默认关闭，由管理员按真实上游能力开启。
 	streaming := true
-	text := &TextCapabilityConfig{Streaming: &streaming, References: TextReferenceConfig{PromptMaxChars: 32000}}
+	thinking := strings.EqualFold(strings.TrimSpace(protocol), "openai-response")
+	text := &TextCapabilityConfig{Streaming: &streaming, Thinking: &thinking, References: TextReferenceConfig{PromptMaxChars: 32000}}
+	promptMaxChars, promptMaxUTF16Units := videoPromptLimits(protocol, modelName)
 	video := &VideoCapabilityConfig{
-		References:        VideoReferenceConfig{PromptMaxChars: DefaultVideoPromptMaxChars, MinImages: 0, MaxImages: 9, MaxImageBytes: 30 * 1024 * 1024, MaxVideos: 0, MaxVideoBytes: 0, MaxVideoDuration: 0, MaxAudios: 0, MaxAudioBytes: 0, MaxAudioDuration: 0},
+		References:        VideoReferenceConfig{PromptMaxChars: promptMaxChars, PromptMaxUTF16Units: promptMaxUTF16Units, MinImages: 0, MaxImages: 9, MaxImageBytes: 30 * 1024 * 1024, MaxVideos: 0, MaxVideoBytes: 0, MaxVideoDuration: 0, MaxAudios: 0, MaxAudioBytes: 0, MaxAudioDuration: 0},
 		Duration:          VideoDurationConfig{Selection: "range", Min: 1, Max: 15, Step: 1, Default: 6},
 		Ratios:            []string{"16:9", "9:16", "1:1", "4:3", "3:4", "21:9"},
 		DefaultRatio:      "16:9",
@@ -222,10 +260,39 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.Watermark = VideoBooleanConfig{Supported: true, Default: false}
 	case model.ChannelInterfaceAgnesVideo:
 		video = applyModelSpecificVideoCapability(video, protocol, modelName)
+	case "full-video":
+		is25 := strings.HasSuffix(strings.ToLower(strings.TrimSpace(modelName)), "2.5")
+		video.References.PromptMaxChars = 4000
+		video.References.MaxImages = 9
+		video.References.MaxVideos = 3
+		video.References.MaxAudios = 3
+		video.References.MaxVideoDuration = 15
+		video.References.MaxAudioDuration = 15
+		video.Duration = VideoDurationConfig{Selection: "range", Min: 4, Max: 15, Step: 1, Default: 5}
+		video.Resolutions = []string{"480p", "720p", "1080p"}
+		if is25 {
+			video.References.MaxImages = 30
+			video.References.MaxVideos = 10
+			video.References.MaxAudios = 10
+			video.References.MaxVideoDuration = 30
+			video.References.MaxAudioDuration = 30
+			video.Duration.Max = 30
+			video.Resolutions = []string{"480p", "720p"}
+		}
+		video.References.MaxVideoBytes = 100_000_000
+		video.References.MaxAudioBytes = 100_000_000
+		video.References.MinVideoDuration = 2
+		video.References.MinAudioDuration = 2
+		video.DefaultResolution = "480p"
+		video.Operations = []string{"text_to_video", "image_to_video", "reference_to_video"}
 	}
 	if protocol == "video-generations-json" {
 		video.Duration.Default = 5
 		video.Resolutions = []string{"720p", "1080p"}
+		video.Watermark = VideoBooleanConfig{Supported: true, Default: false}
+		video.Operations = appendUniqueString(video.Operations, "reference_to_video")
+	}
+	if protocol == string(model.ChannelInterfaceNewAPIChannel2) {
 		video.Watermark = VideoBooleanConfig{Supported: true, Default: false}
 		video.Operations = appendUniqueString(video.Operations, "reference_to_video")
 	}
@@ -234,11 +301,16 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 			video.GenerateAudio = VideoBooleanConfig{Supported: true, Default: true}
 		}
 		video.References = overlayOfficialSeedance2References(video.References, isSeedance25Model(modelName))
-		if model.IsVolcengineArkVideoProtocol(model.ChannelInterfaceType(protocol)) {
-			video.References.MinAudioDuration = 2
+		// 输出时长下限官方是 4 秒：2.0 为 4~15，2.5 为 4~30。
+		if video.Duration.Selection == "range" && video.Duration.Min < documentedSeedanceOutputMinSeconds {
+			video.Duration.Min = documentedSeedanceOutputMinSeconds
+			if video.Duration.Default < documentedSeedanceOutputMinSeconds {
+				video.Duration.Default = documentedSeedanceOutputMinSeconds
+			}
 		}
 		video.Operations = appendUniqueString(video.Operations, "reference_to_video")
 		if isSeedance25Model(modelName) {
+			video.TaskTypeConstraints = true
 			video.Operations = appendUniqueString(video.Operations, "audio_to_video")
 			if video.Duration.Selection == "range" && video.Duration.Max < 30 {
 				video.Duration.Max = 30
@@ -312,6 +384,10 @@ func NormalizeModelCapabilityConfigForModel(capability string, protocol string, 
 			streaming := true
 			text.Streaming = &streaming
 		}
+		if text.Thinking == nil {
+			thinking := strings.EqualFold(strings.TrimSpace(protocol), "openai-response")
+			text.Thinking = &thinking
+		}
 		value := &ModelCapabilityConfig{Version: 1, Text: &text}
 		if err := validateTextCapabilityConfig(value.Text); err != nil {
 			return nil, err
@@ -336,6 +412,207 @@ func NormalizeModelCapabilityConfigForModel(capability string, protocol string, 
 		return nil, err
 	}
 	return value, nil
+}
+
+type CapabilityNormalizer struct{}
+
+func NewCapabilityNormalizer() CapabilityNormalizer {
+	return CapabilityNormalizer{}
+}
+
+func (CapabilityNormalizer) NormalizeModelCapabilityDraft(draft ModelCapabilityDraft) (*ModelCapabilityConfig, error) {
+	return NormalizeModelCapabilityDraft(draft)
+}
+
+func NormalizeModelCapabilityDraft(draft ModelCapabilityDraft) (*ModelCapabilityConfig, error) {
+	if draft.VideoCapabilitiesVersion != nil && strings.TrimSpace(*draft.VideoCapabilitiesVersion) != "" {
+		if draft.CapabilityConfig == nil || draft.CapabilityConfig.Video == nil {
+			return nil, kernel.BadAuthRequest("当前视频模型能力尚未加载，请在设置中刷新模型列表")
+		}
+		if err := validateVideoCapabilityConfig(draft.CapabilityConfig.Video); err != nil {
+			return nil, err
+		}
+		return &ModelCapabilityConfig{Version: 1, Video: draft.CapabilityConfig.Video}, nil
+	}
+	modelName := strings.TrimSpace(draft.Model)
+	protocol := strings.ToLower(strings.TrimSpace(kernel.FirstNonEmpty(draft.Protocol, draft.InterfaceType)))
+	rawCapability := strings.TrimSpace(kernel.FirstNonEmpty(draft.Capability, draft.Type, draft.Category))
+	capability := normalizeCapability(rawCapability)
+	if rawCapability != "" && capability == "" {
+		return nil, kernel.BadAuthRequest("模型能力类型无效")
+	}
+	baseURL := strings.TrimSpace(draft.BaseURL)
+	channelID := strings.TrimSpace(draft.ChannelID)
+
+	isBeefRoute := providerpreset.IsBeefAPIEndpoint(baseURL) || (baseURL == "" && strings.EqualFold(channelID, "beefapi"))
+	if isBeefRoute {
+		if contract, ok := providerpreset.BeefAPIVideoContract(modelName); ok {
+			protocol = contract.Protocol
+			capability = "video"
+		} else if isSeedance2Family("newapi", modelName) && (protocol == "" || protocol == "openai" || protocol == "openai-response" || protocol == "chat-completion" || protocol == "openai-videos" || protocol == "newapi-channel-1" || protocol == "newapi-channel-2") {
+			protocol = "newapi"
+			capability = "video"
+		}
+	}
+	if protocol == "" {
+		switch capability {
+		case "image":
+			protocol = "openai-image"
+		case "video":
+			protocol = "newapi"
+		case "audio":
+			protocol = "openai-audio"
+		default:
+			protocol = "openai"
+		}
+	}
+	if capability == "" {
+		capability = defaultCapabilityForProtocol(protocol)
+	}
+
+	result := DefaultModelCapabilityConfigForModel(protocol, modelName)
+	localItem := LocalChannelModel{
+		ChannelID:                channelID,
+		BaseURL:                  baseURL,
+		Model:                    modelName,
+		Capability:               capability,
+		Protocol:                 protocol,
+		VideoCapabilitiesVersion: draft.VideoCapabilitiesVersion,
+	}
+
+	input := draft.CapabilityConfig
+	if input != nil {
+		if input.Text != nil {
+			text := *input.Text
+			if text.Streaming == nil && result.Text != nil {
+				text.Streaming = result.Text.Streaming
+			}
+			if text.Thinking == nil && result.Text != nil {
+				text.Thinking = result.Text.Thinking
+			}
+			if text.References.PromptMaxChars <= 0 && result.Text != nil {
+				text.References.PromptMaxChars = result.Text.References.PromptMaxChars
+			}
+			normalizedText, err := NormalizeModelCapabilityConfigForModel("text", protocol, modelName, &ModelCapabilityConfig{Version: 1, Text: &text})
+			if err != nil {
+				return nil, err
+			}
+			result.Text = normalizedText.Text
+		}
+		if input.Image != nil {
+			fixedBeefImage := false
+			if strings.EqualFold(protocol, "openai-image") && isBeefRoute {
+				if contract, ok := providerpreset.BeefAPIImageContract(modelName); ok && contract.FixedOutputs > 0 {
+					fixedBeefImage = true
+				}
+			}
+			if !fixedBeefImage {
+				image := mergeDraftImageCapability(result.Image, input.Image)
+				normalizedImage, err := NormalizeModelCapabilityConfigForModel("image", protocol, modelName, &ModelCapabilityConfig{Version: 1, Image: image})
+				if err != nil {
+					return nil, err
+				}
+				result.Image = normalizedImage.Image
+			}
+		}
+		if input.Video != nil {
+			mergedVideo := mergeDraftVideoCapability(result.Video, input.Video)
+			repaired := ApplyLocalVideoContract(localItem, &ModelCapabilityConfig{Version: 1, Video: mergedVideo})
+			if isSeedance2Family(protocol, modelName) && repaired.Video != nil && strings.EqualFold(repaired.Video.Duration.Selection, "enum") && len(repaired.Video.Duration.Values) == 0 && repaired.Video.Duration.Values != nil {
+				result.Video = applyModelSpecificVideoCapability(repaired.Video, protocol, modelName)
+			} else {
+				normalizedVideo, err := NormalizeModelCapabilityConfigForModel("video", protocol, modelName, repaired)
+				if err != nil {
+					return nil, err
+				}
+				result.Video = normalizedVideo.Video
+			}
+		} else {
+			result = ApplyLocalVideoContract(localItem, result)
+		}
+	} else {
+		result = ApplyLocalVideoContract(localItem, result)
+	}
+
+	if result.Video != nil {
+		taskCfg := TaskConfig{
+			ChannelID:        channelID,
+			BaseURL:          baseURL,
+			InterfaceType:    protocol,
+			Model:            modelName,
+			CapabilityConfig: result,
+		}
+		result.Video = tightenedVideoCapability(taskCfg, result.Video)
+		applySeedanceDocumentedVideoPixelFloor(taskCfg, &result.Video.References)
+	}
+	return result, nil
+}
+
+func defaultCapabilityForProtocol(protocol string) string {
+	normalized := strings.ToLower(strings.TrimSpace(protocol))
+	switch {
+	case strings.HasSuffix(normalized, "-image") || normalized == "openai-image" || normalized == "gemini-image" || normalized == "grok-image":
+		return "image"
+	case strings.HasSuffix(normalized, "-audio") || normalized == "openai-audio" || normalized == "minimax-speech":
+		return "audio"
+	case strings.HasSuffix(normalized, "-video") || strings.Contains(normalized, "video") || normalized == "newapi" || normalized == "newapi-channel-1" || normalized == "newapi-channel-2" || normalized == "gemini-veo" || normalized == "luma-dream-machine" || normalized == "zhipu-cogvideox" || normalized == "autodl-comfyui":
+		return "video"
+	default:
+		return "text"
+	}
+}
+
+func mergeDraftImageCapability(fallback, raw *ImageCapabilityConfig) *ImageCapabilityConfig {
+	if raw == nil {
+		return fallback
+	}
+	result := *raw
+	if fallback != nil {
+		if result.References.PromptMaxChars <= 0 {
+			result.References.PromptMaxChars = fallback.References.PromptMaxChars
+		}
+		if result.MaxOutputs <= 0 {
+			result.MaxOutputs = fallback.MaxOutputs
+		}
+		if result.Size.Parameter == "" {
+			result.Size = fallback.Size
+		} else if len(result.Size.Values) > 0 {
+			allWildcard := true
+			for _, item := range result.Size.Values {
+				if item != "*" {
+					allWildcard = false
+					break
+				}
+			}
+			if allWildcard {
+				result.Size.Values = defaultImageSizeValues()
+			}
+		}
+	}
+	return &result
+}
+
+func mergeDraftVideoCapability(fallback, raw *VideoCapabilityConfig) *VideoCapabilityConfig {
+	if raw == nil {
+		return fallback
+	}
+	result := *raw
+	if fallback != nil {
+		if result.Duration.Selection == "" {
+			result.Duration = fallback.Duration
+		}
+		if len(result.Operations) == 0 {
+			result.Operations = append([]string(nil), fallback.Operations...)
+		}
+		if strings.TrimSpace(result.DefaultOperation) == "" || !containsCapabilityString(result.Operations, result.DefaultOperation) {
+			if len(result.Operations) > 0 {
+				result.DefaultOperation = result.Operations[0]
+			} else {
+				result.DefaultOperation = fallback.DefaultOperation
+			}
+		}
+	}
+	return &result
 }
 
 func applyModelSpecificVideoCapability(profile *VideoCapabilityConfig, protocol string, modelName string) *VideoCapabilityConfig {
@@ -567,6 +844,13 @@ func validateImageCapabilityConfig(value *ImageCapabilityConfig) error {
 	if value.FixedOutputs < 0 || value.FixedOutputs > value.MaxOutputs {
 		return kernel.BadAuthRequest("固定图片数量必须在单次图片数量范围内")
 	}
+	// response_format 只支持两个取值；留空交给请求侧按 b64_json 处理。
+	if format := strings.ToLower(strings.TrimSpace(value.ResponseFormat.Value)); format != "" {
+		if format != ImageResponseFormatBase64 && format != ImageResponseFormatURL {
+			return kernel.BadAuthRequest("图片响应格式仅支持 b64_json 或 url")
+		}
+		value.ResponseFormat.Value = format
+	}
 	switch value.Size.Parameter {
 	case "none":
 		value.Size.Values = []string{}
@@ -643,8 +927,11 @@ func validateImageCapabilityConfig(value *ImageCapabilityConfig) error {
 }
 
 func validateVideoCapabilityConfig(value *VideoCapabilityConfig) error {
-	if value.References.PromptMaxChars < 1 || value.References.PromptMaxChars > 1000000 {
-		return kernel.BadAuthRequest("提示词最大字符数必须在 1-1000000 之间")
+	if value.References.PromptMaxChars < 0 || value.References.PromptMaxChars > 1000000 {
+		return kernel.BadAuthRequest("提示词最大字符数必须在 0-1000000 之间，0 表示交由服务商校验")
+	}
+	if value.References.PromptMaxUTF16Units < 0 || value.References.PromptMaxUTF16Units > 1000000 {
+		return kernel.BadAuthRequest("提示词最大 UTF-16 单位数必须在 0-1000000 之间，0 表示交由服务商校验")
 	}
 	for name, number := range map[string]int{"最少图片引用数": value.References.MinImages, "最大图片引用数": value.References.MaxImages, "最大视频引用数": value.References.MaxVideos, "最大音频引用数": value.References.MaxAudios} {
 		if number < 0 || number > 100 {
@@ -686,6 +973,20 @@ func validateVideoCapabilityConfig(value *VideoCapabilityConfig) error {
 	if len(value.Operations) == 0 || strings.TrimSpace(value.DefaultOperation) == "" || !containsCapabilityString(value.Operations, value.DefaultOperation) {
 		return kernel.BadAuthRequest("请至少配置一个生成模式，并选择默认模式")
 	}
+	for operation, limits := range value.OperationReferences {
+		if !containsCapabilityString(value.Operations, operation) {
+			return kernel.BadAuthRequest("参考素材限制对应的生成模式不存在")
+		}
+		for _, count := range []*int{limits.MinImages, limits.MaxImages, limits.MaxVideos, limits.MaxAudios} {
+			if count != nil && (*count < 0 || *count > 100) {
+				return kernel.BadAuthRequest("参考素材数量限制必须在 0-100 之间")
+			}
+		}
+		refs := videoReferencesForOperation(value, operation)
+		if refs.MinImages > refs.MaxImages {
+			return kernel.BadAuthRequest("最少图片引用数不能超过最大图片引用数")
+		}
+	}
 	return nil
 }
 
@@ -720,6 +1021,9 @@ func validateVideoDuration(value VideoDurationConfig) error {
 
 // Upgrade only the old built-in GPT image choices; keep other stored limits.
 func applyModelSpecificImageCapability(profile *ImageCapabilityConfig, protocol string, modelName string, _ string) *ImageCapabilityConfig {
+	if providerpreset.SeedreamFamily(modelName) != "" {
+		return DefaultImageCapabilityConfig(protocol, modelName)
+	}
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	if profile == nil || protocol != "openai-image" || (name != "gpt-image-2" && name != "gpt-image-2.5-flare" && name != "gpt-image-2.5-sunburst") {
 		return profile
@@ -764,17 +1068,39 @@ func validateReferenceDuration(kind string, index int, durationMs int64, minimum
 	if durationMs <= 0 {
 		return kernel.BadAuthRequest(fmt.Sprintf("第 %d 段参考%s的时长无法读取，请重新导入素材后再提交", index+1, kind))
 	}
-	if durationMs < durationLimitMs(minimum) || (maximum > 0 && durationMs > durationLimitMs(maximum)) {
-		return kernel.BadAuthRequest(fmt.Sprintf("第 %d 段参考%s时长为 %.2f 秒，需要 %s 秒；请裁剪或更换这段素材后再提交", index+1, kind, float64(durationMs)/1000, referenceBound(minimum, maximum)))
+	// 按实际违反的是下限还是上限给建议：2–15 秒的限制下，16 秒的素材要往短改。
+	tooShort := durationMs < durationLimitMs(minimum)
+	if tooShort || (maximum > 0 && durationMs > durationLimitMs(maximum)) {
+		return kernel.BadAuthRequest(fmt.Sprintf("第 %d 段参考%s时长为 %.2f 秒，需要改到 %s；%s", index+1, kind, float64(durationMs)/1000, durationRequirement(minimum, maximum), durationFixAction(kind, tooShort)))
 	}
 	return nil
+}
+
+// durationRequirement 写成「2–15 秒」「2 秒以上」「15 秒以内」，说明要改成多少。
+func durationRequirement(minimum, maximum float64) string {
+	if minimum <= 0 {
+		return formatDurationBound(maximum) + " 秒以内"
+	}
+	if maximum <= 0 {
+		return formatDurationBound(minimum) + " 秒以上"
+	}
+	return formatDurationBound(minimum) + "–" + formatDurationBound(maximum) + " 秒"
+}
+
+// durationFixAction 按实际违反的是哪一侧给出可直接照做的下一步。
+func durationFixAction(kind string, tooShort bool) string {
+	noun := kind
+	if tooShort {
+		return "请换一段更长的" + noun + "后再提交"
+	}
+	return "请裁剪或换一段更短的" + noun + "后再提交"
 }
 
 func validateVideoTask(profile *VideoCapabilityConfig, input TaskInput) error {
 	if profile == nil {
 		return kernel.BadAuthRequest("当前视频模型能力参数无效")
 	}
-	if err := validateModelPromptLength("视频", input.Prompt, profile.References.PromptMaxChars); err != nil {
+	if err := validateVideoPromptLength(input.Prompt, profile.References); err != nil {
 		return err
 	}
 	if err := validateVideoReferenceMedia(profile, input); err != nil {
@@ -787,7 +1113,8 @@ func validateVideoTaskParameters(profile *VideoCapabilityConfig, input TaskInput
 	if profile == nil {
 		return kernel.BadAuthRequest("当前视频模型能力参数无效")
 	}
-	if err := validateModelPromptLength("视频", input.Prompt, profile.References.PromptMaxChars); err != nil {
+	profile = tightenedVideoCapability(input.Config, profile)
+	if err := validateVideoPromptLength(input.Prompt, profile.References); err != nil {
 		return err
 	}
 	seconds, err := strconv.ParseFloat(strings.TrimSpace(input.Config.VideoSeconds), 64)
@@ -799,35 +1126,41 @@ func validateVideoTaskParameters(profile *VideoCapabilityConfig, input TaskInput
 			allowed = videoDurationAllowed(profile.Duration, int(seconds))
 		}
 	}
-	if !allowed {
-		return kernel.BadAuthRequest("视频时长不在当前模型支持范围内")
+	if !allowed && videoDurationSupported(profile) {
+		requirement := videoDurationRequirement(profile.Duration)
+		if requirement == "" {
+			return kernel.BadAuthRequest("当前模型没有可用的输出时长，请先在模型能力里设置至少 4 秒的时长后再提交")
+		}
+		return kernel.BadAuthRequest(fmt.Sprintf("输出时长为 %s 秒，当前模型只支持 %s；请改成 %s 后再提交", strings.TrimSpace(input.Config.VideoSeconds), requirement, requirement))
 	}
-	if input.Config.Size != "" && !videoRatioAllowed(profile.Ratios, input.Config.Size) {
+	if input.Config.Size != "" && !(hasServerVideoCapability(input.Config) && len(profile.Ratios) == 0) && !videoRatioAllowed(profile.Ratios, input.Config.Size) {
 		return kernel.BadAuthRequest("画面比例不在当前模型支持范围内")
 	}
 	if len(profile.Resolutions) > 0 && !isAutomaticVideoResolution(input.Config.VQuality) && videoResolutionNameRequest(profile, input.Config.VQuality) == "" {
 		return kernel.BadAuthRequest("输出分辨率不在当前模型支持范围内")
 	}
-	operation := metadataString(input.Metadata, "videoEditOperation")
-	if operation == "" {
-		if len(input.ReferenceImages) > 0 {
-			operation = "image_to_video"
-		} else {
-			operation = profile.DefaultOperation
-		}
-	}
+	operation := videoTaskOperation(profile, input)
 	if !containsCapabilityString(profile.Operations, operation) {
 		return kernel.BadAuthRequest("当前视频模型不支持该生成模式")
+	}
+	if len(profile.OperationReferences) > 0 {
+		return validateVideoReferenceCounts(videoReferencesForOperation(profile, metadataString(input.Metadata, "videoEditOperation")), input)
 	}
 	return nil
 }
 
 func validateImageTask(profile *ImageCapabilityConfig, input TaskInput) error {
-	profile = applyModelSpecificImageCapability(profile, input.Config.InterfaceType, input.Config.Model, input.Config.APIFormat)
-	if providerpreset.IsBeefAPIEndpoint(input.Config.BaseURL) {
+	sourced := input.Config.ImageCapabilitiesVersion != nil && *input.Config.ImageCapabilitiesVersion != ""
+	if !sourced {
+		profile = applyModelSpecificImageCapability(profile, input.Config.InterfaceType, input.Config.Model, input.Config.APIFormat)
+	}
+	if !sourced && providerpreset.IsBeefAPIEndpoint(input.Config.BaseURL) {
 		if contract, ok := providerpreset.BeefAPIImageContract(input.Config.Model); ok {
 			profile = DefaultImageCapabilityConfig(contract.Protocol, input.Config.Model)
 			if _, err := contract.PixelSize(input.Config.Size); err != nil {
+				return kernel.BadAuthRequest(err.Error())
+			}
+			if _, err := contract.GenerationPrompt(composedPrompt(input.Config.SystemPrompt, input.Prompt), input.Config.Size); err != nil {
 				return kernel.BadAuthRequest(err.Error())
 			}
 			if err := validateModelPromptLength("图片", composedPrompt(input.Config.SystemPrompt, input.Prompt), contract.PromptMaxChars); err != nil {
@@ -840,6 +1173,12 @@ func validateImageTask(profile *ImageCapabilityConfig, input TaskInput) error {
 	}
 	if profile == nil {
 		return nil
+	}
+	if family := providerpreset.SeedreamFamily(input.Config.Model); family != "" {
+		layers := strings.EqualFold(metadataString(input.Metadata, "seedreamMode"), "layers")
+		if _, err := providerpreset.ResolveSeedreamSize(family, input.Config.Size, layers); err != nil {
+			return kernel.BadAuthRequest(err.Error())
+		}
 	}
 	modelName := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(input.Config.Model)), "models/")
 	if input.Config.InterfaceType == string(model.ChannelInterfaceGrokImage) && modelName == "grok-imagine-image-quality" {
@@ -866,7 +1205,7 @@ func validateImageTask(profile *ImageCapabilityConfig, input TaskInput) error {
 	if profile.Size.Parameter != "none" && !profile.Size.AllowCustom && strings.TrimSpace(input.Config.Size) != "" && !containsCapabilityString(profile.Size.Values, input.Config.Size) {
 		return kernel.BadAuthRequest("图片尺寸不在当前模型支持范围内")
 	}
-	if profile.Size.Parameter == "size" && profile.Size.AllowCustom && strings.HasPrefix(modelName, "gpt-image-2") && !containsCapabilityString(profile.Size.Values, input.Config.Size) {
+	if !sourced && profile.Size.Parameter == "size" && profile.Size.AllowCustom && strings.HasPrefix(modelName, "gpt-image-2") && !containsCapabilityString(profile.Size.Values, input.Config.Size) {
 		if err := validateGPTImage2CustomSize(input.Config.Size); err != nil {
 			return kernel.BadAuthRequest(err.Error())
 		}
@@ -929,7 +1268,7 @@ func validateWorkflowProviderPromptLength(input TaskInput) error {
 	if input.Mode != "video" || profile == nil || profile.Video == nil {
 		return nil
 	}
-	return validateModelPromptLength("视频", input.Prompt, profile.Video.References.PromptMaxChars)
+	return validateVideoPromptLength(input.Prompt, profile.Video.References)
 }
 
 func validateModelPromptLength(label string, prompt string, maxChars int) error {
@@ -988,6 +1327,35 @@ func durationMinimum(value VideoDurationConfig) float64 {
 		return value.FractionalMin
 	}
 	return float64(value.Min)
+}
+
+// videoDurationRequirement 把模型支持的输出时长写成可直接照着改的说法：
+// 「4–15 秒」「5、10 秒」「自动或 4–15 秒」。
+func videoDurationRequirement(value VideoDurationConfig) string {
+	if value.Selection == "enum" {
+		parts := make([]string, 0, len(value.Values))
+		manual := make([]string, 0, len(value.Values))
+		for _, seconds := range value.Values {
+			if seconds == -1 {
+				parts = append(parts, "自动")
+				continue
+			}
+			manual = append(manual, strconv.Itoa(seconds))
+		}
+		if len(manual) > 0 {
+			parts = append(parts, strings.Join(manual, "、")+" 秒")
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return strings.Join(parts, " 或 ")
+	}
+	minimum := durationMinimum(value)
+	maximum := float64(value.Max)
+	if maximum > 0 {
+		return formatDurationBound(minimum) + "–" + formatDurationBound(maximum) + " 秒"
+	}
+	return formatDurationBound(minimum) + " 秒以上"
 }
 
 func videoRatioAllowed(options []string, value string) bool {

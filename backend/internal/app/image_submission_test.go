@@ -27,10 +27,17 @@ func imageSubmissionFixture(t *testing.T, multipartBody bool) (*Service, *gorm.D
 	t.Helper()
 	s, db, _, _ := creationTestService(t)
 	s.workerID = newID()
+	key, err := s.encryptSettingSecret("private-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.ModelChannel{}).Where("id = ?", "channel").Updates(map[string]any{"base_url": "https://enterprise.beefapi.com", "api_key": key}).Error; err != nil {
+		t.Fatal(err)
+	}
 	task := model.Task{ID: "image-task", UserID: "user", Type: "canvas_image", Status: model.TaskStatusRunning, LeaseOwner: "owner", InputJSON: `{"mode":"image"}`}
 	expires := time.Now().Add(time.Hour)
 	task.LeaseExpiresAt = &expires
-	attempt := &model.RouteAttempt{ID: "image-attempt", TaskID: task.ID, Status: "dispatching", DispatchState: "submission_unknown", StartedAt: time.Now()}
+	attempt := &model.RouteAttempt{ID: "image-attempt", TaskID: task.ID, ChannelID: "channel", Status: "dispatching", DispatchState: "submission_unknown", StartedAt: time.Now()}
 	for _, row := range []any{&task, attempt} {
 		if err := db.Create(row).Error; err != nil {
 			t.Fatal(err)
@@ -65,6 +72,60 @@ func imageSubmissionFixture(t *testing.T, multipartBody bool) (*Service, *gorm.D
 }
 
 func noImageWait(context.Context, time.Duration) error { return nil }
+
+func TestImageSubmissionMidjourneyCountRejectionStopsWithoutRecovery(t *testing.T) {
+	s, _, task, row, _ := imageSubmissionFixture(t, false)
+	calls := 0
+	_, _, err := s.sendImageSubmissionWith(context.Background(), task, row, func(_ *http.Request, admit func() error) ([]byte, string, error) {
+		if err := admit(); err != nil {
+			return nil, "", err
+		}
+		calls++
+		return nil, "", providerHTTPError{StatusCode: 500, Body: `{"error":{"code":"invalid_request","message":"Midjourney generates four images per request; n must be 4 or omitted (request id: safe-request-id)"}}`}
+	}, noImageWait)
+	failure := classifyTaskFailure(err)
+	if calls != 1 || failure.Category != generation.CategoryInvalidParams || failure.Uncertain {
+		t.Fatalf("calls=%d failure=%+v", calls, failure)
+	}
+	attempt, loadErr := s.repo.LatestRouteAttempt(task.ID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	s.finishTaskRouteAttempt(attempt, &task, err)
+	if attempt.DispatchState != "rejected_no_job" {
+		t.Fatalf("route state=%s", attempt.DispatchState)
+	}
+}
+
+func TestImageSubmissionCountRejectionRequiresExplicitEvidence(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"code":"invalid_request","message":"internal processing failed"}}`,
+		`{"error":{"code":"internal_error","message":"Midjourney generates four images per request; n must be 4 or omitted"}}`,
+		`{"task_id":"accepted-task","error":{"code":"invalid_request","message":"Midjourney generates four images per request; n must be 4 or omitted"}}`,
+		`<html>Midjourney generates four images per request; n must be 4 or omitted</html>`,
+	} {
+		err := providerHTTPError{StatusCode: 500, Body: body}
+		if definiteMidjourneyCountRejection(err) || !retrySameImageSubmission(err) {
+			t.Fatalf("unknown submission treated as a definite rejection: %s", body)
+		}
+	}
+}
+
+func TestImageSubmissionCountErrorCannotErasePriorAcceptance(t *testing.T) {
+	s, _, task, row, _ := imageSubmissionFixture(t, false)
+	if err := s.repo.MarkImageSubmissionAccepted(row); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := s.sendImageSubmissionWith(context.Background(), task, row, func(_ *http.Request, admit func() error) ([]byte, string, error) {
+		if err := admit(); err != nil {
+			return nil, "", err
+		}
+		return nil, "", providerHTTPError{StatusCode: 500, Body: `{"error":{"code":"invalid_request","message":"Midjourney generates four images per request; n must be 4 or omitted"}}`}
+	}, noImageWait)
+	if failure := classifyTaskFailure(err); !failure.Uncertain || failure.Category != generation.CategorySubmissionUncertain {
+		t.Fatalf("accepted response lost: %+v", failure)
+	}
+}
 
 func TestImageSubmissionUnknownProviderCannotReplayOrRetryLostResponse(t *testing.T) {
 	s, db, task, row, _ := imageSubmissionFixture(t, false)
@@ -145,6 +206,9 @@ func TestImageSubmissionDiskRestartReplaysOneGenerationAndCompletesOnce(t *testi
 		got, _ := io.ReadAll(req.Body)
 		if !bytes.Equal(got, body) {
 			t.Fatal("replay changed request bytes")
+		}
+		if req.Header.Get("X-BeefAPI-Image-Media-Protocol") != "" {
+			t.Fatal("legacy frozen request acquired a new media contract")
 		}
 		if key == "" {
 			key = req.Header.Get("Idempotency-Key")

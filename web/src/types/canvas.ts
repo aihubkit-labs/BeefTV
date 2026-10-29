@@ -1,5 +1,7 @@
 import type { CanvasColorGrade } from "@/lib/canvas/canvas-color-grade";
+import type { WorkflowDefinition, WorkflowMediaType, WorkflowNodeRole, WorkflowRun, WorkflowValue } from "@/services/api/canvas-workflows";
 import type { MediaConversionNodeState } from "@/lib/media-conversion/contracts";
+import type { CanvasUpscaleSettings, CanvasUpscaleBatch } from "@/lib/canvas/canvas-upscale";
 import type { AssetCategory } from "@/lib/asset-category";
 import type { PortraitTextureSettings } from "@/lib/canvas/canvas-portrait-texture";
 import type { StyleExecutionPlan } from "@/lib/canvas/style-profile";
@@ -28,6 +30,8 @@ export enum CanvasNodeType {
     Video = "video",
     Audio = "audio",
     Frame = "frame",
+    Workflow = "reusable-workflow",
+    WorkflowControl = "workflow-control",
     Markdown = "markdown",
     Svg = "svg",
     Html = "html",
@@ -36,6 +40,7 @@ export enum CanvasNodeType {
     Chart = "chart",
     ColorGrade = "colorgrade",
     MediaConversion = "media-conversion",
+    Upscale = "upscale",
     BatchTable = "batch-table",
     Director = "director",
 }
@@ -151,6 +156,7 @@ export type CanvasGenerationBatchItem = {
     status: CanvasGenerationBatchItemStatus;
     retryCount: number;
     errorDetails?: string;
+    errorCode?: string;
     submissionUncertain?: boolean;
 };
 
@@ -184,6 +190,20 @@ export type CanvasSkillSnapshot = {
 };
 
 export type CanvasNodeMetadata = {
+    /** Deterministic canvas processing recipe, without runtime state or credentials. */
+    workflowOperation?: { id: string; version: number; config: Record<string, string | number | boolean>; inputs: Array<{ nodeId: string; port: string; order?: number }> };
+    reusableWorkflow?: {
+        layoutVersion?: number;
+        templateId: string;
+        templateRevision?: number;
+        definition: WorkflowDefinition;
+        run?: WorkflowRun;
+        intent?: { clientOperationId: string; inputs: Record<string, WorkflowValue> };
+        error?: string;
+        inputsChanged?: boolean;
+        runApplied?: boolean;
+    };
+    workflowSlot?: { instanceId: string; nodeId: string; role: WorkflowNodeRole; mediaType: WorkflowMediaType; status?: string; error?: string };
     /** Media interaction role. `generator` owns generation controls; `result` is an inspect/process object. */
     nodeRole?: CanvasMediaNodeRole;
     /** How a media result entered the canvas. Only meaningful when nodeRole is `result`. */
@@ -241,8 +261,8 @@ export type CanvasNodeMetadata = {
     locked?: boolean;
     errorDetails?: string;
     generationErrorCode?: string;
+    generationPreflightError?: string;
     outputParameterWarning?: string;
-    resourceReloadAvailable?: boolean;
     failedPromptFingerprint?: string;
     failedInputFingerprint?: string;
     lastGenerationRequestFingerprint?: string;
@@ -258,6 +278,12 @@ export type CanvasNodeMetadata = {
     size?: string;
     quality?: string;
     transparentBackground?: string;
+    imageLayer?: Record<string, unknown>;
+    seedreamMode?: string;
+    seedreamMaxImages?: string;
+    seedreamOutputFormat?: string;
+    seedreamOptimize?: string;
+    seedreamWatermark?: string;
     count?: number;
     textCount?: number;
     seconds?: string;
@@ -278,6 +304,8 @@ export type CanvasNodeMetadata = {
     isBatchRoot?: boolean;
     batchRootId?: string;
     batchChildIds?: string[];
+    /** Original output targets for this generation; independent of the editable batch layout. */
+    generationOutputNodeIds?: string[];
     batchFailedCount?: number;
     batchUsesReferenceImages?: boolean;
     primaryImageId?: string;
@@ -338,6 +366,7 @@ export type CanvasNodeMetadata = {
     actionBoardColumns?: number;
     taskId?: string;
     taskType?: string;
+    taskOutcome?: import("@/lib/task-outcome").TaskOutcome;
     taskClientOperationId?: string;
     taskOutputIndex?: number;
     generationSubmissionState?: "submitting" | "unknown" | "accepted" | "rejected";
@@ -446,9 +475,13 @@ export type CanvasNodeMetadata = {
     /** 调色节点的参数；缺省视为未调色。 */
     colorGrade?: CanvasColorGrade;
     mediaConversion?: MediaConversionNodeState;
+    upscale?: CanvasUpscaleSettings;
+    upscaleBatch?: CanvasUpscaleBatch;
+    generatedFromProcessingNodeId?: string;
     /** 用户手动拉伸过尺寸；图片按真实比例自动适配时避让它。 */
     manualSize?: boolean;
     storyboard?: StoryboardData;
+    storyboardVisibleColumnsCustomized?: boolean;
     storyboardShotDuration?: StoryboardShotDuration;
     storyboardShotCount?: StoryboardShotCount;
     storyboardVideoInputMode?: StoryboardVideoInputMode;

@@ -5,7 +5,7 @@ import { getImageBlob } from "@/services/image-storage";
 import { resourceIdFromStorageKey, resourceStorageKey, uploadResourceFile } from "@/services/api/resources";
 import { createGenerationTask, findGenerationTaskByOperation, waitForGenerationTask, type GenerationTask, type CreateTaskInput } from "@/services/api/task-center";
 import { submitGenerationCommand } from "./generation-submission";
-import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
+import { modelCapabilityConfigFor, VIDEO_CAPABILITIES_UNAVAILABLE } from "@/lib/model-capabilities";
 import { grokImagePromptLimitError } from "@/lib/grok-image-prompt-limit";
 import { resolveGenerationWorkflowExecution, type GenerationWorkflowExecution } from "@/lib/generation-workflow-execution";
 import { isArkPlanBaseUrl } from "@/lib/seedance-video";
@@ -110,7 +110,7 @@ export async function runBackendGenerationTask(
     assertBackendRuntimeConfigured(config, mode);
     const prepared = await prepareGenerationReferences({ config, mode, referenceImages, referenceVideos, referenceAudios, mask });
     throwIfAborted(signal);
-    assertPreparedVideoCapability(mode, config, prepared);
+    assertPreparedVideoCapability(mode, config, prepared, metadata);
     return createAndWaitGenerationTask(
         { projectId, mode, prompt, config, referenceImages, referenceVideos, referenceAudios, textHistory, signal, metadata, onTaskUpdate, onTextDelta, streamText, enableThinking, clientOperationId, retryOf, attemptGroupId, expectedScope, resolveReferenceLinks },
         prepared,
@@ -126,7 +126,7 @@ export async function submitBackendGenerationTask(options: BackendGenerationTask
     assertBackendRuntimeConfigured(options.config, options.mode);
     const prepared = await prepareGenerationReferences(options);
     throwIfAborted(options.signal);
-    assertPreparedVideoCapability(options.mode, options.config, prepared);
+    assertPreparedVideoCapability(options.mode, options.config, prepared, options.metadata);
     return createBackendGenerationTask(options, prepared, dependencies);
 }
 
@@ -235,6 +235,7 @@ export function isGenerationTaskCancelled(error: unknown, signal?: AbortSignal) 
 function assertBackendRuntimeConfigured(config: AiConfig, mode: BackendGenerationMode) {
     if (resolveGenerationWorkflowExecution(config, mode)) return;
     if (logicalModelIDForConfig(config)) return;
+    if (mode === "video" && modelCapabilityConfigFor(config, config.model).videoCapabilitiesUnavailable) throw new Error(VIDEO_CAPABILITIES_UNAVAILABLE);
     const requestConfig = resolveModelRequestConfig(config, config.model);
     if (!requestConfig.channelId && !requestConfig.interfaceType) throw new Error("当前模型未选择可用请求协议，请先在模型设置中选择协议插件");
 }
@@ -315,9 +316,11 @@ async function createBackendGenerationTask(options: BackendGenerationTaskOptions
         }));
         if (prepared.mask && needsURL("image", 0, true) && (prepared.mask.storageKey || !isReferenceHTTPSLink(prepared.mask.url || ""))) references.push({ key: "mask:0", label: "遮罩", name: prepared.mask.name, resourceID: resourceIdFromStorageKey(prepared.mask.storageKey) || undefined, upload: transport?.image !== "link" });
         if (!references.length) throw error;
+        const nodeId = options.metadata?.nodeId;
+        const target = options.projectId && typeof nodeId === "string" && nodeId ? { projectId: options.projectId, nodeId } : undefined;
         const links = options.resolveReferenceLinks
-            ? await options.resolveReferenceLinks(references, options.signal)
-            : await uploadReferenceLinks(references, options.signal);
+            ? await options.resolveReferenceLinks(references, options.signal, target)
+            : await uploadReferenceLinks(references, options.signal, target);
         throwIfAborted(options.signal);
         assertUserScope(expectedScope);
         if (!links || references.some((reference) => !links[reference.key])) throw error;
@@ -334,7 +337,7 @@ async function createBackendGenerationTask(options: BackendGenerationTaskOptions
         prepared.referenceVideos = replace(prepared.referenceVideos, "referenceVideos");
         prepared.referenceAudios = replace(prepared.referenceAudios, "referenceAudios");
         if (prepared.mask) prepared.mask = replace([prepared.mask], "mask")[0];
-        assertPreparedVideoCapability(options.mode, options.config, prepared);
+        assertPreparedVideoCapability(options.mode, options.config, prepared, options.metadata);
         task = await submit();
     }
     options.onTaskUpdate?.(task);
@@ -347,17 +350,17 @@ export async function prepareBackendGenerationTask(options: BackendGenerationTas
     assertBackendRuntimeConfigured(options.config, options.mode);
     const prepared = await prepareGenerationReferences(options);
     throwIfAborted(options.signal);
-    assertPreparedVideoCapability(options.mode, options.config, prepared);
+    assertPreparedVideoCapability(options.mode, options.config, prepared, options.metadata);
     return backendGenerationTaskInput(options, prepared);
 }
 
-function assertPreparedVideoCapability(mode: BackendGenerationMode, config: AiConfig, prepared: PreparedGenerationReferences) {
+function assertPreparedVideoCapability(mode: BackendGenerationMode, config: AiConfig, prepared: PreparedGenerationReferences, metadata?: Record<string, unknown>) {
     if (mode !== "video") return;
     const profile = modelCapabilityConfigFor(config, config.model).video;
     if (!profile) return;
     // Owned workflow resources can carry only a key; the backend reads their
     // authoritative metadata and validates it before contacting the provider.
-    assertVideoCapability(profile, prepared.referenceImages, prepared.referenceVideos, prepared.referenceAudios, config.videoSeconds, { deferResourceMetadataToBackend: true });
+    assertVideoCapability(profile, prepared.referenceImages, prepared.referenceVideos, prepared.referenceAudios, config.videoSeconds, { deferResourceMetadataToBackend: true, operation: typeof metadata?.videoEditOperation === "string" ? metadata.videoEditOperation : undefined });
 }
 
 function backendGenerationTaskInput(options: BackendGenerationTaskOptions, prepared: PreparedGenerationReferences): CreateTaskInput {
@@ -477,6 +480,11 @@ export function backendProviderConfig(config: AiConfig, mode: BackendGenerationM
         size: config.size,
         quality: omittedImageQuality(config.quality, requestConfig),
         transparentBackground: config.transparentBackground,
+        seedreamMode: config.seedreamMode,
+        seedreamMaxImages: config.seedreamMaxImages,
+        seedreamOutputFormat: config.seedreamOutputFormat,
+        seedreamOptimize: config.seedreamOptimize,
+        seedreamWatermark: config.seedreamWatermark,
         count: config.count,
         videoSeconds: config.videoSeconds,
         vquality: config.vquality,
@@ -505,7 +513,8 @@ export function backendProviderConfig(config: AiConfig, mode: BackendGenerationM
         credentialRef: requestConfig.credentialRef,
         model: requestConfig.model,
         ...generationOptions,
-        capabilityConfig: modelCapabilityConfigFor(config, requestConfig.model),
+        capabilityConfig: modelCapabilityConfigFor(config, config.model),
+        imageCapabilitiesVersion: resolveModelChannel(config, config.model).modelProfiles?.find((item) => item.model === requestConfig.model)?.imageCapabilitiesVersion,
         videoCapabilitiesVersion: resolveModelChannel(config, config.model).modelProfiles?.find((item) => item.model === requestConfig.model)?.videoCapabilitiesVersion,
         systemPrompt: config.systemPrompt,
     };

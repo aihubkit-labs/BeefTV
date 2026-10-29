@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/generation"
 	"strings"
 	"time"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/outbound"
 	"infinite-canvas/backend/internal/taskruntime"
 )
 
@@ -42,6 +44,7 @@ func (w *taskWorkerCoordinator) start(ctx context.Context) {
 	s.startTextReplayCleanup(ctx)
 	s.startProviderCancellationReconciliation(ctx)
 	s.startGenerationDeliveryRecovery(ctx)
+	s.startCanvasWorkflowScheduler(ctx)
 	// 旧内置 Agent 的后台调度已整体从产品生命周期移出：
 	//   - 不再启动记忆自动压缩（它会按周期调用用户的文本模型）；
 	//   - 不再按运行模式启动 advanceCloudAgents 轮次调度。
@@ -91,6 +94,9 @@ func (w *taskWorkerCoordinator) executeClaimed(session taskruntime.Session) task
 	}
 	if task.Type == model.TaskTypeDepthCapture {
 		return w.specialTaskOutcome(session, w.processDepthCapture)
+	}
+	if task.Type == model.TaskTypeCanvasMediaTransform {
+		return w.specialTaskOutcome(session, w.processCanvasMedia)
 	}
 
 	task.Stage = "调用生成模型"
@@ -309,10 +315,14 @@ func taskExecutionTimeoutWithPolicy(taskType string, policy RuntimeTaskPolicy) t
 
 func (s *Service) shouldDeferVideoProviderTask(task model.Task, decryptedInput string, err error) bool {
 	providerRequestID := strings.TrimSpace(task.ProviderRequestID)
-	if providerRequestID == "" || (!strings.HasPrefix(task.Type, "canvas_video") && !strings.HasPrefix(task.Type, "video_")) {
+	if providerRequestID == "" || (!strings.HasPrefix(task.Type, "canvas_video") && !strings.HasPrefix(task.Type, "video_") && generation.UpscaleMediaType(task.Model) == "") {
 		return false
 	}
 	deferSignal := errors.Is(err, context.DeadlineExceeded)
+	var dns *outbound.DNSResolutionError
+	if errors.As(err, &dns) {
+		deferSignal, _ = retryableVideoPollError(context.Background(), err)
+	}
 	var downloadErr videoDownloadError
 	if errors.As(err, &downloadErr) {
 		deferSignal, _ = retryableVideoPollError(context.Background(), downloadErr.Cause)
@@ -331,6 +341,11 @@ func (s *Service) shouldDeferVideoProviderTask(task model.Task, decryptedInput s
 	var input canvasGenerationInput
 	if json.Unmarshal([]byte(decryptedInput), &input) != nil {
 		return false
+	}
+	// Selecting the known query-only contract does not need another DNS lookup.
+	// The resumed GET still runs the normal URL/IP and credential checks.
+	if input.Config.ChannelID == "" && isBeefAPIVideoConfig(context.Background(), input.Config) {
+		return true
 	}
 	resolved, resolveErr := s.resolveProviderConfig(input.Config)
 	return resolveErr == nil && (resolved.InterfaceType == string(model.ChannelInterfaceNewAPIChannel2) || isBeefAPIVideoConfig(context.Background(), resolved))

@@ -3,12 +3,12 @@ import { createClientId } from "@/lib/client-id";
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { App } from "antd";
 
-import { buildNodeGenerationContext, hydrateNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
+import { compileNodeGenerationReferences, buildNodeGenerationContext, hydrateNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
-import { isGenerationCanceled } from "@/lib/canvas/canvas-project-generation";
+import { buildVideoGenerationMetadata, isGenerationCanceled, MISSING_GENERATION_TASK_IDENTITY_DETAILS } from "@/lib/canvas/canvas-project-generation";
 import { buildConfirmedGenerationConfig } from "./canvas-assistant-proposal-execution";
 import type { ConfirmedGenerationInputs } from "./canvas-assistant-proposal-snapshot";
-import { canvasGenerationPromptMetadata, canvasGenerationRequestFingerprint, runCanvasGenerationSubmissionOnce } from "@/lib/canvas/canvas-generation-submission";
+import { canReleaseCanvasGenerationSource, canvasGenerationPromptMetadata, canvasGenerationRequestFingerprint, runCanvasGenerationSubmissionOnce } from "@/lib/canvas/canvas-generation-submission";
 import { resolvedCanvasGenerationRequirements } from "@/lib/canvas/canvas-generation-config";
 import { isGenerationTaskCapacityError } from "@/lib/canvas/canvas-generation-batch";
 import { buildPortraitTexturePrompt } from "@/lib/canvas/canvas-portrait-texture";
@@ -18,24 +18,30 @@ import { resolveCanvasStyleExecution } from "@/lib/canvas/canvas-style-execution
 import { generationErrorMessage } from "@/lib/generation-error";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import { modelCompatibilityError, modelGroupReferenceLimits, modelPromptLengthError, modelRequestOptions, type ModelRequirements } from "@/lib/model-selection";
+import { referencedAssetIdsInPrompt } from "@/lib/canvas/canvas-resource-references";
 import type { Skill } from "@/services/api/skills";
 import { skillRuntime } from "@/services/skill-runtime";
+import { loadWorkspaceAssetsForUse } from "@/services/workspace-asset-read";
 import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
-import { findGenerationTaskByOperation, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
+import { findGenerationTaskByOperation, queryGenerationTask, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { assertUserScope, captureUserScope } from "@/lib/user-scope-guard";
 import { useConfigStore, useEffectiveConfig, resolveModelRequestConfig } from "@/stores/use-config-store";
 import { seedanceReferenceRatioWarning } from "@/lib/seedance-channel-warning";
-import type { Asset } from "@/stores/use-asset-store";
+import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/types/canvas";
 
 import { executeImageGeneration } from "./canvas-image-generation-executor";
 import { executeAudioGeneration, executeVideoGeneration } from "./canvas-media-generation-executors";
 import { executeTextGeneration } from "./canvas-text-generation-executor";
-import { canvasGenerationFailureMetadata, canvasGenerationRetryBlocked, canvasImageGenerationHasPendingResult, canvasImagePendingResultMessage } from "./canvas-generation-failure";
+import { canvasGenerationFailureMetadata, canvasImagePendingResultMessage } from "./canvas-generation-failure";
+import { canvasNodeHasPendingOutcomeResult, isNodeRegenerateBlocked, isNodeRegenerateConfirm, readNodeTaskOutcome, taskOutcomeCopy } from "@/lib/task-outcome";
 import { createReferenceLinkResolver } from "@/components/generation-reference-links";
 import { confirmCanvasGeneration, waitForCanvasPreparation } from "./canvas-generation-preflight";
+import { startOperation } from "@/stores/use-operation-progress";
+import type { CanvasPageUiStoreHook } from "@/stores/canvas/use-canvas-page-ui-store";
 
 type UseCanvasGenerationExecutorOptions = {
+    pageUi: CanvasPageUiStoreHook;
     projectId: string;
     domainProjectId?: string;
     addedSkills: Skill[];
@@ -44,9 +50,6 @@ type UseCanvasGenerationExecutorOptions = {
     connectionsRef: { current: CanvasConnection[] };
     setNodes: Dispatch<SetStateAction<CanvasNodeData[]>>;
     setConnections: Dispatch<SetStateAction<CanvasConnection[]>>;
-    setSelectedNodeIds: Dispatch<SetStateAction<Set<string>>>;
-    setSelectedConnectionId: Dispatch<SetStateAction<string | null>>;
-    setDialogNodeId: Dispatch<SetStateAction<string | null>>;
     setRunningNodeId: Dispatch<SetStateAction<string | null>>;
     startGenerationRequest: (targetNodeId: string, originNodeId: string, runningId?: string, controller?: AbortController) => AbortController;
     finishGenerationRequest: (targetNodeId: string, controller: AbortController) => void;
@@ -69,10 +72,12 @@ export type CanvasNodeGenerationOptions = {
     context?: { conversationId?: string; messageId?: string };
     retryContext?: { retryOf: string; attemptGroupId: string; clientOperationId: string };
     onTaskUpdate?: (task: GenerationTask) => void;
+    onSubmissionPlan?: (manifest: import("@/services/api/assistant-continuation").AssistantSubmissionManifest) => Promise<void>;
     skipDuplicateConfirmation?: boolean;
 };
 
 export function useCanvasGenerationExecutor({
+    pageUi,
     projectId,
     domainProjectId,
     addedSkills,
@@ -81,9 +86,6 @@ export function useCanvasGenerationExecutor({
     connectionsRef,
     setNodes,
     setConnections,
-    setSelectedNodeIds,
-    setSelectedConnectionId,
-    setDialogNodeId,
     setRunningNodeId,
     startGenerationRequest,
     finishGenerationRequest,
@@ -112,10 +114,12 @@ export function useCanvasGenerationExecutor({
             runCanvasGenerationSubmissionOnce(
                 submissionLocksRef.current,
                 nodeId,
-                async () => {
+                async (releaseSubmission) => {
                     let stage = "validation";
                     const attemptId = createClientId();
                     let preparing = false;
+                    let preparationProgress: ReturnType<typeof startOperation> | undefined;
+                    let sourceReleased = false;
                     let selectedModel = options?.confirmedModelKey || "";
                     let refSummary = "";
                     const startedAt = performance.now();
@@ -128,11 +132,16 @@ export function useCanvasGenerationExecutor({
                     };
                     diagnostic("generation_submit_started");
                     const controller = options?.controller ?? new AbortController();
-                    const preparationMessageKey = `canvas-generation-preparation-${nodeId}`;
+                    const preparationMessageKey = `canvas-generation-preparation-${attemptId}`;
                     const reportError = (error: unknown) => {
                         if (controller.signal.aborted || isGenerationCanceled(error)) return;
                         const errText = generationErrorMessage(error);
                         diagnostic(error instanceof Error && error.name === "CanvasPreparationTimeoutError" ? "generation_preflight_timeout" : "generation_preflight_failed", "error", errText);
+                        if (["validation", "references", "skills", "parameters"].includes(stage)) {
+                            setNodes((current) => current.map((node) => node.id === nodeId
+                                ? { ...node, metadata: { ...node.metadata, generationPreflightError: errText } }
+                                : node));
+                        }
                         message.error(errText);
                     };
                     try {
@@ -141,7 +150,7 @@ export function useCanvasGenerationExecutor({
                         const inputNodes = frozen.nodes;
                         const inputConnections = frozen.connections;
                         const inputConfig = frozen.config;
-                        const inputAssets = frozen.assets;
+                        let inputAssets = frozen.assets;
                         const inputSkills = frozen.skills;
                         const sourceNode = inputNodes.find((node) => node.id === nodeId);
                         const pendingSubmissions = nodesRef.current.filter((node) => (node.id === nodeId || node.metadata?.generatedFromNodeId === nodeId) && ["submitting", "unknown"].includes(node.metadata?.generationSubmissionState || ""));
@@ -149,10 +158,16 @@ export function useCanvasGenerationExecutor({
                             const scope = captureUserScope();
                             startGenerationRequest(nodeId, nodeId, nodeId, controller);
                             for (const target of pendingSubmissions) {
-                                const task = await findGenerationTaskByOperation(target.metadata!.taskClientOperationId!, projectId, controller.signal);
+                                const taskId = target.metadata?.taskId;
+                                const operationId = target.metadata?.taskClientOperationId;
+                                if (!taskId && !operationId?.trim()) throw new Error(MISSING_GENERATION_TASK_IDENTITY_DETAILS);
+                                const task = taskId
+                                    ? await queryGenerationTask(taskId, { signal: controller.signal, expectedScope: scope })
+                                    : await findGenerationTaskByOperation(operationId!, projectId, controller.signal);
                                 controller.signal.throwIfAborted();
                                 assertUserScope(scope);
                                 if (!task) { message.warning("尚未查到上次提交的任务，请稍后再查询，暂勿重新生成"); continue; }
+                                if (task.projectId && task.projectId !== projectId) throw new Error("生成任务不属于当前画布");
                                 bindGenerationTask(target.id, task);
                                 const completed = await waitForGenerationTask(task.id, { signal: controller.signal, expectedScope: scope, initialTask: task, onTaskUpdate: (update) => bindGenerationTask(target.id, update) });
                                 controller.signal.throwIfAborted();
@@ -161,7 +176,7 @@ export function useCanvasGenerationExecutor({
                             }
                             return;
                         }
-                        if (mode === "image" && canvasImageGenerationHasPendingResult(sourceNode, inputNodes)) {
+                        if (mode === "image" && canvasNodeHasPendingOutcomeResult(sourceNode, inputNodes)) {
                             diagnostic("generation_pending_result", "warning");
                             message.warning(canvasImagePendingResultMessage(sourceNode, inputNodes));
                             return;
@@ -222,8 +237,12 @@ export function useCanvasGenerationExecutor({
                         startGenerationRequest(nodeId, nodeId, nodeId, controller);
                         preparing = true;
                         setRunningNodeId(nodeId);
-                        message.loading({ key: preparationMessageKey, content: "正在准备参考素材…", duration: 0 });
+                        if (mode === "video") preparationProgress = startOperation("准备视频素材", { target: { projectId, nodeId }, detail: "正在准备参考素材" });
+                        else message.loading({ key: preparationMessageKey, content: "正在准备参考素材…", duration: 0 });
                         stage = "references";
+                        setNodes((current) => current.map((node) => node.id === nodeId && node.metadata?.generationPreflightError
+                            ? { ...node, metadata: { ...node.metadata, generationPreflightError: undefined } }
+                            : node));
                         diagnostic("generation_preflight_stage");
                         // AutoDL/其他声明式视频协议需要结构化参考素材；只有普通
                         // 模型视频接口才把提示词视为纯文本输入。
@@ -231,6 +250,15 @@ export function useCanvasGenerationExecutor({
                         // 普通视频协议仍把媒体按协议处理；连线文本自动合并到提示词，显式 @引用也会展开。
                         const promptOnly = mode === "video" && !usesWorkflowProvider;
                         try {
+                            // 素材库列表按需加载，显式引用不能仅凭是否出现在列表中判断失效。
+                            const missingAssetIds = referencedAssetIdsInPrompt(generationPrompt).filter((id) => !inputAssets.some((asset) => asset.id === id));
+                            if (missingAssetIds.length) {
+                                const scope = captureUserScope();
+                                await waitForCanvasPreparation(() => loadWorkspaceAssetsForUse(missingAssetIds, scope), controller.signal);
+                                assertUserScope(scope);
+                                const loaded = useAssetStore.getState().assets.filter((asset) => missingAssetIds.includes(asset.id));
+                                inputAssets = [...inputAssets, ...structuredClone(loaded)];
+                            }
                             const baseContext = buildNodeGenerationContext(
                                 nodeId,
                                 inputNodes,
@@ -238,6 +266,7 @@ export function useCanvasGenerationExecutor({
                                 editingTextNode ? buildTextRewritePrompt(sourceTextContent, prompt) : generationPrompt,
                                 inputAssets,
                                 promptOnly,
+                                { preserveMediaBindings: mode === "video" },
                             );
                             const requirements = generationModelRequirements(mode, baseContext, sourceNode, generationConfig, true);
                             if (requirements?.input) {
@@ -274,6 +303,10 @@ export function useCanvasGenerationExecutor({
                             return;
                         }
                         let effectivePrompt = skillExecution.prompt.trim();
+                        if (mode === "video") {
+                            rawGenerationContext = compileNodeGenerationReferences({ ...rawGenerationContext, prompt: effectivePrompt }, generationConfig, buildVideoGenerationMetadata(sourceNode, rawGenerationContext, generationConfig).videoEditOperation);
+                            effectivePrompt = rawGenerationContext.prompt;
+                        }
                         stage = "parameters";
                         let styleMetadata = {};
                         if (mode === "image") {
@@ -294,10 +327,31 @@ export function useCanvasGenerationExecutor({
                             return;
                         }
                         const generationContext = { ...rawGenerationContext, prompt: effectivePrompt };
-                        if (canvasGenerationRetryBlocked(sourceNode?.metadata, { ...generationContext, mode })) {
+                        if (isNodeRegenerateBlocked(sourceNode?.metadata)) {
                             diagnostic("generation_retry_blocked", "warning");
-                            message.warning(sourceNode?.metadata?.errorDetails || "请先查看失败原因并调整输入，再重新生成");
+                            message.warning(sourceNode?.metadata?.errorDetails || taskOutcomeCopy(readNodeTaskOutcome(sourceNode?.metadata)).message);
                             return;
+                        }
+                        if (isNodeRegenerateConfirm(sourceNode?.metadata) && modal?.confirm) {
+                            const copy = taskOutcomeCopy(readNodeTaskOutcome(sourceNode?.metadata));
+                            stage = "duplicate_confirmation";
+                            diagnostic("generation_confirmation_waiting");
+                            const confirmed = await confirmCanvasGeneration(
+                                (callbacks) =>
+                                    modal.confirm({
+                                        title: copy.confirmTitle || "确认重新生成？",
+                                        content: copy.confirmContent || copy.message,
+                                        okText: "确认重新生成",
+                                        cancelText: "取消",
+                                        centered: true,
+                                        ...callbacks,
+                                    }),
+                                controller.signal,
+                            );
+                            if (!confirmed) {
+                                diagnostic("generation_confirmation_cancelled");
+                                return;
+                            }
                         }
                         if (mode === "audio" && generationContext.characterReferences.length) {
                             if (generationContext.characterReferences.length !== 1) {
@@ -366,6 +420,7 @@ export function useCanvasGenerationExecutor({
 
                         controller.signal.throwIfAborted();
                         stage = "dispatch";
+                        preparationProgress?.dismiss();
                         diagnostic("generation_dispatch_started");
                         if (isPreparingEmptyImage) {
                             setNodes((current) =>
@@ -383,7 +438,7 @@ export function useCanvasGenerationExecutor({
                                                   taskCreatedAt: new Date().toISOString(),
                                                   errorDetails: undefined,
                                                   generationErrorCode: undefined,
-                                                  resourceReloadAvailable: undefined,
+                                                  taskOutcome: undefined,
                                                   failedPromptFingerprint: undefined,
                                                   failedInputFingerprint: undefined,
                                               },
@@ -403,14 +458,16 @@ export function useCanvasGenerationExecutor({
                                     node.id === nodeId
                                         ? {
                                               ...node,
-                                              metadata: { ...node.metadata, ...canvasGenerationPromptMetadata(prompt, statusPrompt), status: NODE_STATUS_LOADING, errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, failedPromptFingerprint: undefined, failedInputFingerprint: undefined },
+                                              metadata: { ...node.metadata, ...canvasGenerationPromptMetadata(prompt, statusPrompt), status: NODE_STATUS_LOADING, errorDetails: undefined, generationErrorCode: undefined, taskOutcome: undefined, failedPromptFingerprint: undefined, failedInputFingerprint: undefined },
                                           }
                                         : node,
                                 ),
                             );
 
                         let pendingNodeIds: string[] = [];
+                        const boundTaskIds = new Set<string>();
                         const execution = {
+                            pageUi,
                             projectId,
                             nodesRef,
                             nodeId,
@@ -429,18 +486,31 @@ export function useCanvasGenerationExecutor({
                             skillMetadata: skillExecution.metadata,
                             taskContext: options?.context,
                             retryContext: options?.retryContext,
-                                clientOperationId: options?.clientOperationId || options?.retryContext?.clientOperationId || `canvas:${createClientId()}`,
+                            onSubmissionPlan: options?.onSubmissionPlan,
+                                clientOperationId:
+                                    options?.clientOperationId ||
+                                    options?.retryContext?.clientOperationId ||
+                                    (sourceNode?.metadata?.taskClientOperationId && !sourceNode?.metadata?.taskId ? sourceNode.metadata.taskClientOperationId : undefined) ||
+                                    `canvas:${createClientId()}`,
                             setNodes,
                             setConnections,
-                            setSelectedNodeIds,
-                            setSelectedConnectionId,
-                            setDialogNodeId,
                             startGenerationRequest,
                             finishGenerationRequest,
                             bindGenerationTask: (targetNodeId: string, task: GenerationTask) => {
-                                recordDiagnosticEvent({ category: "task", level: "info", code: "generation_submission_bound", message: "画布提交已关联生成任务", requestId: attemptId, canvasId: projectId, taskId: task.id });
+                                const firstBinding = boundTaskIds.size === 0;
+                                if (!boundTaskIds.has(task.id)) {
+                                    boundTaskIds.add(task.id);
+                                    recordDiagnosticEvent({ category: "task", level: "info", code: "generation_submission_bound", message: "画布提交已关联生成任务", requestId: attemptId, canvasId: projectId, taskId: task.id, canvasBinding: { source: "client", nodeId: targetNodeId, clientOperationId: task.clientOperationId } });
+                                }
                                 bindGenerationTask(targetNodeId, task);
-                                setNodes((current) => {
+                                if (!sourceReleased && !controller.signal.aborted && canReleaseCanvasGenerationSource(nodeId, targetNodeId, task)) {
+                                    sourceReleased = true;
+                                    preparing = false;
+                                    finishGenerationRequest(nodeId, controller);
+                                    setRunningNodeId((current) => current === nodeId ? null : current);
+                                    releaseSubmission();
+                                }
+                                if (firstBinding) setNodes((current) => {
                                     const source = current.find((node) => node.id === nodeId);
                                     if (!source || source.metadata?.lastGenerationRequestFingerprint === requestFingerprint) return current;
                                     return current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, lastGenerationRequestFingerprint: requestFingerprint } } : node));
@@ -487,6 +557,7 @@ export function useCanvasGenerationExecutor({
                                 current.map((node) => {
                                     if (node.id !== nodeId && !pendingNodeIds.includes(node.id)) return node;
                                     if (node.id === nodeId && !pendingNodeIds.includes(node.id)) {
+                                        if (sourceReleased) return node;
                                         if (hasPreviousResult) {
                                             return { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined, failedInputFingerprint: undefined } };
                                         }
@@ -502,6 +573,7 @@ export function useCanvasGenerationExecutor({
                         diagnostic(controller.signal.aborted ? "generation_submission_aborted" : "generation_submission_finished");
                         message.destroy(preparationMessageKey);
                         finishGenerationRequest(nodeId, controller);
+                        preparationProgress?.dismiss();
                         if (preparing) setRunningNodeId((current) => current === nodeId ? null : current);
                     }
                 },
@@ -525,11 +597,8 @@ export function useCanvasGenerationExecutor({
             connectionsRef,
             projectId,
             setConnections,
-            setDialogNodeId,
             setNodes,
             setRunningNodeId,
-            setSelectedConnectionId,
-            setSelectedNodeIds,
             startGenerationRequest,
         ],
     );

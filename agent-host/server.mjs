@@ -8,18 +8,24 @@ import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent';
 import { createModels } from '@earendil-works/pi-ai/models';
-import { createDurableSessionStore, isDurableSessionId } from './durable-session-owner.mjs';
+import { createDurableSessionStore, durableLifecycleState, durableStreamEvents, isDurableSessionId, publicDurableTurn } from './durable-session-owner.mjs';
+import { createDurableTurnProjection } from './durable-turn-projection.mjs';
 import { createDurableTurnBudget } from './durable-turn-budget.mjs';
 import { providerRegistration, providerUnavailableReason,
-  turnContextPrefix, unflushedSessionHistory } from './canvas-turn.mjs';
+  turnContextPrefix, unflushedSessionHistory, toolCallCapabilityContext } from './canvas-turn.mjs';
 import { budgetError, spendModelRequest } from './request-budget.mjs';
 import { createDurableRequestBudget } from './durable-request-budget.mjs';
 import { createOperationBridge } from './operation-bridge.mjs';
 import { createLegacyHistory } from './session-owner.mjs';
-import { adaptMediaRequest, trustedMediaSources } from './media-content.mjs';
+import { adaptMediaRequest, trustedMediaSources, mediaCapabilityContext } from './media-content.mjs';
 import {nativeSourceKey} from './native-history.mjs';
 import { createNativePartStore } from './native-part-store.mjs';
 import { fetchModelWithProgressIdle } from './model-stream-idle.mjs';
+import { createDispatchDiagnostics } from './dispatch-diagnostics.mjs';
+
+// SDK imports install npm undici's direct dispatcher. Restore Node's public env
+// proxy support after imports, before any SDK/ops request or fetch wrapper runs.
+if (process.env.NODE_USE_ENV_PROXY === '1') http.setGlobalProxyFromEnv();
 
 const OPS_URL = (process.env.BEEFTV_OPS_URL || 'http://127.0.0.1:18090/api').replace(/\/+$/, '');
 const HOST_TOKEN = process.env.BEEFTV_AGENT_HOST_TOKEN || '';
@@ -87,6 +93,7 @@ async function initializeModel() {
 
 const outbound = [];
 const ledgerPath = path.join(DATA_DIR, 'agent-requests.jsonl');
+const dispatchDiagnostics = createDispatchDiagnostics(ledgerPath, RUN_ID);
 let dispatched = 0;
 
 const lifetimeBudgetPath = path.join(DATA_DIR, 'agent-request-budget.json');
@@ -150,9 +157,11 @@ globalThis.fetch = async (input, options = {}) => {
     dispatched += 1;
     let bodyModel = null;
     try { bodyModel = JSON.parse(options.body || '{}').model || null; } catch { /* 非 JSON body */ }
-    const entry = { at: new Date().toISOString(), dispatchIndex: dispatched, origin: parsed.origin, path: parsed.pathname, model: bodyModel };
+    const entry = { at: new Date().toISOString(), dispatchIndex: dispatched, origin: parsed.origin, path: parsed.pathname, model: bodyModel,
+      turnId: budget?.turnId, canvasId: budget?.canvasId, sessionId: budget?.sessionId, requestId: budget?.requestId };
     outbound.push(entry);
-    fs.appendFileSync(ledgerPath, JSON.stringify(entry) + '\n');
+    if (outbound.length > 200) outbound.shift();
+    dispatchDiagnostics.record(entry);
   }
   return isModelCall ? fetchModelWithProgressIdle(input, options, {fetch: realFetch}) : realFetch(input, options);
 };
@@ -178,15 +187,31 @@ const durable = createDurableSessionStore({
       entry.budget.sessionId=entry.sessionId; entry.budget.nativeHistory=entry.nativeHistory;
     entry.budget.generation = entry.generation;
       entry.budget.turnId = entry.turn.turnId; entry.budget.canvasId = entry.canvasId;
+      entry.budget.requestId = entry.input?.requestId;
       return turnBudgetContext.run(entry.budget,()=>fn.call(provider,...args));
     };
     models.setProvider({...provider,stream:budgeted(provider.stream),streamSimple:budgeted(provider.streamSimple)});
     return models;
   },
   getModelRef: () => ({ provider: PROVIDER_ID, modelId: MODEL_ID }),
+  authorizeContinuation: ({id,turnId,sessionId}) => ops.opsRequest('POST',`/assistant/runtime/continuations/${encodeURIComponent(id)}/verify`,{turnId,sessionId}),
   skills: {
+    readContext:async (entry,turnId) => ops.opsRequest('GET',`/assistant/runtime/canvases/${encodeURIComponent(entry.canvasId)}/skill-context?sessionId=${encodeURIComponent(entry.sessionId)}${turnId?`&turnId=${encodeURIComponent(turnId)}`:''}`),
+    changeContext:async (entry,change,turnId) => ops.opsRequest('POST',`/assistant/runtime/canvases/${encodeURIComponent(entry.canvasId)}/skill-context`,{...change,sessionId:entry.sessionId,...(turnId?{turnId}:{})}),
     readVersion:async (entry,pin,signal,turnId) => (await ops.opsRequest('POST','/ops/skill.get',{params:pin},signal,turnId || entry.turn.turnId)).result,
-    readCatalog:async (entry,signal,turnId) => (await ops.opsRequest('POST','/ops/skill.catalog',{params:{}},signal,turnId || entry.turn.turnId)).result,
+    readCatalog:async (entry,signal,turnId,query={}) => (await ops.opsRequest('POST','/ops/skill.catalog',{params:query},signal,turnId || entry.turn.turnId)).result,
+  },
+  readCanvas: async (entry, signal, turnId) => {
+    if (!ops.descriptors.has('canvas_get')) return null;
+    const { result } = await ops.opsRequest('POST', '/ops/canvas.get', { params: { canvasId: entry.canvasId } }, signal, turnId || entry.turn.turnId);
+    const canvas = result?.canvas;
+    // Read the full Go document, not the operation wrapper or the paged model view.
+    // Stored empty documents may omit/null collections; other shapes are unknown.
+    if (result?.canvasId !== entry.canvasId || !canvas || typeof canvas !== 'object' || Array.isArray(canvas) ||
+        !Number.isSafeInteger(canvas.revision) || canvas.revision < 0 ||
+        (canvas.nodes != null && !Array.isArray(canvas.nodes)) ||
+        (canvas.connections != null && !Array.isArray(canvas.connections))) throw new Error('invalid_canvas_read_result');
+    return { ...canvas, nodes: canvas.nodes ?? [], connections: canvas.connections ?? [] };
   },
   authorizeTurn: async ({canvasId, turnId,sessionId}) => {
     const state = await ops.opsRequest('GET', `/assistant/runtime/turns/${encodeURIComponent(turnId)}`);
@@ -200,6 +225,7 @@ const durable = createDurableSessionStore({
     entry.budget.sessionId=entry.sessionId; entry.budget.nativeHistory=entry.nativeHistory;
     entry.budget.generation = entry.generation;
     entry.budget.turnId = entry.turn.turnId; entry.budget.canvasId = entry.canvasId;
+    entry.budget.requestId = entry.input?.requestId;
     return turnBudgetContext.run(entry.budget, fn);
   },
 });
@@ -216,25 +242,49 @@ function currentId(canvasId) {
 function liveEntry(canvasId) {
   return durable.sessions.get(canvasId) || null;
 }
+// A conversation of this canvas: a durable session created for it, or one of its legacy sessions.
+function ownsSession(canvasId, sessionId) {
+  if (isDurableSessionId(sessionId)) return durable.hasSession(canvasId, sessionId);
+  try { return sessionId === currentId(canvasId) || Boolean(SessionManager.findById(legacy.canvasWorkspace(canvasId), sessionId, legacy.canvasSessionDir(canvasId))); }
+  catch { return false; }
+}
 function emitDurable(entry, event) {
-  const mapped = [];
-  if (event.type === 'message_update') {
-    for (const change of event.changes || []) if (change.type === 'text_delta') mapped.push({type:'text_delta',delta:change.delta});
-  }
-  if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') mapped.push({
-    type:'lifecycle', phase:event.type === 'tool_execution_start' ? 'tool' : 'tool_end',toolName:event.toolName,
-  });
-  for (const payload of mapped) for (const listener of entry.listeners || []) listener(payload);
+  // History reads restore this progress. It lives in memory only; the official task persists itself.
+  const events = durableStreamEvents(event, entry.lifecycle);
+  entry.lifecycle = durableLifecycleState(entry.lifecycle, event);
+  if (event.type === 'plan') entry.livePlan = event.plan;
+  const projected = entry.turnProjection.accept(event);
+  for (const payload of [...projected, ...events]) for (const listener of entry.listeners || []) listener(payload);
 }
 function followDurable(entry, submission) {
   if (!entry.running) {
     entry.listeners = new Set();
-    entry.running = durable.wait(entry, submission, {onEvent:event=>emitDurable(entry,event)})
-      .finally(()=>{entry.running=null;});
+    entry.lifecycle = null;
+    entry.turnProjection = createDurableTurnProjection();
+    entry.livePlan = entry.turn.plan ?? null;
+    const ready = Promise.withResolvers();
+    entry.turnProjectionReady = ready.promise;
+    entry.running = durable.wait(entry, submission, {onEvent:event=>{
+      emitDurable(entry,event);
+      if (event.type === 'snapshot') ready.resolve();
+    }})
+      .finally(()=>{ready.resolve();entry.running=null;entry.lifecycle=null;});
     // Observers may disconnect; the official task and its completion persist.
     entry.running.catch(error=>console.error(`agent-host: durable wait ${error.reason || error.message}`));
   }
   return entry.running;
+}
+
+async function waitForDurableProjection(entry) {
+  if (entry.turnProjection?.initialized || !entry.turnProjectionReady) return;
+  // Only wait for the initial official snapshot, never the model's completion.
+  // On storage delay/failure omit streamed instead of publishing a false empty value.
+  let timer;
+  try {
+    await Promise.race([entry.turnProjectionReady, new Promise(resolve => {
+      timer = setTimeout(resolve, 1000);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 async function attachmentContent(body, turnId) {
@@ -245,8 +295,9 @@ async function attachmentContent(body, turnId) {
       const reference = {canvasId:body.canvasId,
         ...(attachment.nodeId ? {nodeId:attachment.nodeId}:{assetId:attachment.assetId}),resourceId:attachment.resourceId};
       const overview = await ops.opsRequest('POST','/ops/media.overview',{params:reference},undefined,turnId);
-      const data = await ops.opsRequest('POST','/ops/media.inspect',{params:{...reference,
+      const data = overview.result.image?.view === 'preview' ? overview : await ops.opsRequest('POST','/ops/media.inspect',{params:{...reference,
         expectedVersion:overview.result.source.version,mode:'frames'}},undefined,turnId);
+      if (data.result.image) content.push({type:'text',text:JSON.stringify({image:data.result.image,note:data.result.note,source:data.result.source})});
       content.push(...data.result.content.filter(part=>part.type==='image').map(part=>({type:'image',data:part.data,mimeType:part.mimeType})));
     }
   }
@@ -298,6 +349,12 @@ function respond(res, status, payload) {
 }
 
 function respondStoreError(res, error) {
+  if (['skill_context_revision_conflict','skill_context_request_conflict','skill_scope_reset_pending','skill_context_changed'].includes(error?.reason)) {
+    respond(res,409,{code:409,reason:error.reason});return true;
+  }
+  if (['invalid_skill_context_action','invalid_skill_context_request','invalid_skill_selection','skill_selection_limit','skill_context_budget_exceeded'].includes(error?.reason)) {
+    respond(res,400,{code:400,reason:error.reason});return true;
+  }
   if (error?.reason === 'session_busy') { respond(res, 409, { code: 409, reason: 'session_busy' }); return true; }
   if (error?.reason === 'session_not_current') { respond(res, 409, { code: 409, reason: 'session_not_current' }); return true; }
   if (error?.reason === 'session_not_found') { respond(res, 404, { code: 404, reason: 'session_not_found' }); return true; }
@@ -344,6 +401,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   try {
+    if (url.pathname === '/skill-context' && ['GET','POST'].includes(req.method)) {
+      const body=req.method==='POST'?JSON.parse((await readBody(req)) || '{}'):Object.fromEntries(url.searchParams);
+      const canvasId=String(body.canvasId || '').trim();
+      if (!canvasId) {respond(res,400,{reason:'invalid_request'});return;}
+      const entry=await durable.ensureSession(canvasId,String(body.sessionId || ''));
+      const result=req.method==='GET'?await durable.skillContext(entry):await durable.changeSkillContext(entry,{
+        action:body.action,expectedRevision:body.expectedRevision,requestId:body.requestId,...(body.pins?{pins:body.pins}:{})});
+      respond(res,200,result);return;
+    }
     if (req.method === 'GET' && url.pathname === '/active') {
       const canvasId = String(url.searchParams.get('canvasId') || '');
       const sessionId = String(url.searchParams.get('sessionId') || currentId(canvasId));
@@ -403,10 +469,20 @@ const server = http.createServer(async (req, res) => {
         if (requested && sessionId !== currentId(canvasId)) {
           respond(res,200,await durable.history(canvasId,sessionId)); return;
         }
-        const entry = await durable.ensureSession(canvasId,sessionId);
+        // A live owner of the current session is read as is: polling must not republish the pointer.
+        const live = liveEntry(canvasId);
+        const entry = live?.sessionId === sessionId ? live : await durable.ensureSession(canvasId,sessionId);
         const submission = await durable.recover(entry);
         if (submission) followDurable(entry,submission);
-        respond(res,200,await durable.history(canvasId,sessionId)); return;
+        await waitForDurableProjection(entry);
+        const value = await durable.history(canvasId,sessionId);
+        if (value.active && entry.lifecycle) value.active.lifecycle = entry.lifecycle;
+        if (value.active && entry.turnProjection?.initialized) value.active.streamed = entry.turnProjection.text;
+        // 重开面板时正在进行的这一轮也要能看到已收到的思考，与实时流同形。
+        // 投影初始化之后思考是权威值：清空后必须写空数组，轮询才能撤掉上一次读到的旧思考；
+        // 没拿到初始投影时仍然省略字段，不把尚未观测到的状态当成确定空值。
+        if (value.active && entry.turnProjection?.initialized) value.active.reasoning = entry.turnProjection.reasoning;
+        respond(res,200,value); return;
       }
       const file = SessionManager.findById(cwd, sessionId, sessionDir);
       if (!file) {
@@ -420,12 +496,36 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/cancel') {
       const body = JSON.parse((await readBody(req)) || '{}');
-      const entry = liveEntry(body.canvasId);
+      const canvasId = String(body.canvasId || '').trim();
+      if ('requestId' in body || 'sessionId' in body) {
+        // A Stop that names one send: only that request stops, even if its /chat has not arrived yet.
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+        const requestId = typeof body.requestId === 'string' ? body.requestId : '';
+        if (!canvasId || !sessionId || !/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) { respond(res, 400, { code: 400, reason: 'invalid_request' }); return; }
+        if (!ownsSession(canvasId, sessionId)) { respond(res, 404, { code: 404, reason: 'session_not_found' }); return; }
+        const result = await durable.cancelRequest(canvasId, sessionId, requestId);
+        if (result.state === 'running') {
+          // Persist stop intent before the Go fence so a crash can still journal it.
+          const turnId = await durable.fenceStop(result.entry, requestId);
+          if (turnId) {
+            await ops.opsRequest('POST',`/assistant/runtime/turns/${encodeURIComponent(turnId)}/complete`,{});
+            await durable.stop(result.entry, requestId);
+          }
+        }
+        respond(res,202,{accepted:true,state:result.state === 'running' ? 'stopped' : result.state}); return;
+      }
+      const entry = liveEntry(canvasId);
       if (!entry) { respond(res, 404, { code: 404, reason: 'session_not_found' }); return; }
-      // Persist stop intent before the Go fence so a crash can still journal it.
-      await durable.fenceStop(entry);
-      await ops.opsRequest('POST',`/assistant/runtime/turns/${encodeURIComponent(entry.turn.turnId)}/complete`,{});
-      await durable.stop(entry);
+      // An idle entry has no turn to stop; its turn ID would be the previous, settled one.
+      if (entry.busy) {
+        // Persist stop intent before the Go fence so a crash can still journal it.
+        const requestId = entry.input?.requestId;
+        const turnId = await durable.fenceStop(entry, requestId);
+        if (turnId) {
+          await ops.opsRequest('POST',`/assistant/runtime/turns/${encodeURIComponent(turnId)}/complete`,{});
+          await durable.stop(entry, requestId);
+        }
+      }
       respond(res,202,{accepted:true,busy:entry.busy}); return;
     }
     if (req.method === 'POST' && url.pathname === '/steer') {
@@ -451,6 +551,22 @@ const server = http.createServer(async (req, res) => {
         respond(res,202,{accepted:true}); return;
       } catch (error) { pending.reject(error); throw error; }
     }
+    if (req.method === 'POST' && url.pathname === '/events') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      const canvasId = String(body.canvasId || '').trim();
+      const message = String(body.message || '').trim();
+      if (!canvasId || !message || message.length > 8000) {
+        respond(res, 400, { code: 400, reason: 'invalid_request' }); return;
+      }
+      const result = await durable.recordEvent(canvasId, {
+        sessionId: body.sessionId || currentId(canvasId),
+        requestId: body.requestId,
+        kind: body.kind || 'event',
+        message,
+        data: body.data && typeof body.data === 'object' ? body.data : {},
+      });
+      respond(res, 202, result); return;
+    }
     if (req.method === 'POST' && url.pathname === '/chat') {
       const body = JSON.parse((await readBody(req)) || '{}');
       const canvasId = String(body.canvasId || '').trim();
@@ -459,30 +575,45 @@ const server = http.createServer(async (req, res) => {
       const revisionBefore = Number(body.revisionBefore || 0);
       const requestedSessionId = String(body.sessionId || '').trim();
       const chosen = requestedSessionId || currentId(canvasId);
+	  if (body.continuationId && (!requestedSessionId || chosen !== currentId(canvasId))) { respond(res,409,{reason:'session_not_current'}); return; }
       if (!canvasId || (!userText && !body.attachments?.length) || !turnId) { respond(res,400,{reason:'invalid_request'}); return; }
       if (providerReason) { respond(res,503,{reason:providerReason}); return; }
+      // A Stop naming this request, from before its arrival until the official submit, cancels it (durable submit).
+      const requestId = body.requestId || turnId;
       // 权限只由 Go 回合记录决定：宿主和模型都不能自报。
       const authority=await ops.opsRequest('GET',`/assistant/runtime/turns/${encodeURIComponent(turnId)}`);
       if(authority.canvasId!==canvasId || authority.open===false) throw Object.assign(new Error('turn_not_open'),{reason:'turn_not_open'});
       body.permissionMode=authority.permissionMode || 'canvas';
       // 只有 Durable 一套执行运行时：选中的是 Durable 会话就直接接上；否则（旧 JSONL 会话或尚无会话）
       // 新建一条 Durable 会话，并用旧会话文本作为交接说明开头。
-      const entry = isDurableSessionId(chosen)
+      const entry = body.continuationId
+        ? await durable.ensureCurrentSession(canvasId, chosen)
+        : isDurableSessionId(chosen)
         ? await durable.ensureSession(canvasId,chosen)
         : chosen ? await durable.handoffSession(canvasId, legacy.readHandoffNote(canvasId,chosen), chosen)
           : await durable.ensureSession(canvasId);
       const content = await attachmentContent(body,turnId);
-      content[0].text = `${turnContextPrefix(body)}\n${content[0].text}`;
-      const submission = await durable.submit(entry,{...body,content,userText,revisionBefore,requestId:body.requestId || turnId});
+      content[0].text = `${turnContextPrefix(body)}\n${mediaCapabilityContext({ api: MODEL_API, modelId: MODEL_ID })}\n${toolCallCapabilityContext({ api: MODEL_API, modelId: MODEL_ID })}\n${content[0].text}`;
+      const submission = await durable.submit(entry,{...body,content,userText,revisionBefore,requestId});
       res.durableTurn = true;
       res.writeHead(200,{'Content-Type':'application/x-ndjson'});
       sendLine(res, { type: 'session', sessionId: entry.sessionId, turnId });
+      if (!submission) {
+        // Stopped before the official submit (now or on an earlier send): answer with its stopped record.
+        const record = (await durable.history(canvasId,entry.sessionId)).turns.find((turn) => turn.requestId === requestId);
+        sendLine(res,{...record,type:'turn_end',persistence:entry.persistence,sessionId:entry.sessionId}); res.end(); return;
+      }
       const result = followDurable(entry,submission);
       const listener = payload=>{ if (!res.destroyed) sendLine(res,payload); };
       entry.listeners.add(listener);
+      // A repeated request re-attaches to a running turn: show its current progress first.
+      if (entry.turnProjection.initialized) listener({ type: 'text_snapshot', text: entry.turnProjection.text });
+      if (entry.turnProjection.reasoning.length) listener({ type: 'reasoning_snapshot', segments: entry.turnProjection.reasoning });
+      listener({ type: 'plan', plan: entry.livePlan });
+      if (entry.lifecycle) listener(entry.lifecycle);
       try {
         const record = await result;
-        if (!res.destroyed) { sendLine(res,{...record,type:'turn_end',persistence:entry.persistence,sessionId:entry.sessionId}); res.end(); }
+        if (!res.destroyed) { sendLine(res,{...publicDurableTurn(record),type:'turn_end',persistence:entry.persistence,sessionId:entry.sessionId}); res.end(); }
       } finally { entry.listeners.delete(listener); }
       return;
     }

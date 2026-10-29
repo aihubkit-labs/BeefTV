@@ -30,6 +30,15 @@ func ValidateConfiguredTask(input TaskInput, lookup ChannelModelLookup) (TaskInp
 			return input, validateImageTask(profile, input)
 		}
 		profile := input.Config.CapabilityConfig
+		if hasServerVideoCapability(input.Config) {
+			if profile == nil || profile.Video == nil {
+				return input, kernel.BadAuthRequest("当前视频模型能力尚未加载，请在设置中刷新模型列表")
+			}
+			if err := validateVideoCapabilityConfig(profile.Video); err != nil {
+				return input, err
+			}
+			return input, validateVideoTask(profile.Video, input)
+		}
 		if profile == nil || profile.Video == nil {
 			if input.Config.InterfaceType != string(model.ChannelInterfaceAgnesVideo) {
 				return input, nil
@@ -76,5 +85,5 @@ func ValidateWorkflowProviderPromptLength(input TaskInput) error {
 	if input.Mode != "video" || profile == nil || profile.Video == nil {
 		return nil
 	}
-	return validateModelPromptLength("视频", input.Prompt, profile.Video.References.PromptMaxChars)
+	return validateVideoPromptLength(input.Prompt, profile.Video.References)
 }

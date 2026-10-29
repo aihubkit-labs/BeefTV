@@ -1,4 +1,4 @@
-import { defaultModelCapabilityConfig, sanitizeServerVideoCapability, type ModelCapabilityConfig, type VideoCapabilityConfig } from "@/lib/model-capabilities";
+import { defaultModelCapabilityConfig, sanitizeServerImageCapability, versionedVideoCapability, type ModelCapabilityConfig, type VideoCapabilityConfig, type ImageCapabilityConfig } from "@/lib/model-capabilities";
 import { modelProtocolCapability, protocolForModelCatalog, protocolForBeefAPICatalog, type ModelProtocol } from "@/lib/model-protocols";
 import type { ModelChannel } from "@/stores/use-config-store";
 import { isBeefAPIEndpoint } from "@/lib/beefapi-video-contracts";
@@ -12,6 +12,8 @@ export type ChannelModelCatalogItem = {
     displayName?: string;
     modelType?: "text" | "image" | "video" | "audio";
     supportedEndpointTypes?: string[];
+    imageCapabilities?: ImageCapabilityConfig;
+    imageCapabilitiesVersion?: string;
     defaultParameters?: {
         aspectRatio?: string;
         durationSeconds?: string;
@@ -40,6 +42,7 @@ export function sanitizeChannelModelCatalogItem(value: unknown): ChannelModelCat
     const modelType = stringValue(record.modelType).toLowerCase();
     const defaultParameters = objectValue(record.defaultParameters);
     const options = objectValue(record.options);
+    const imageCapabilities = sanitizeServerImageCapability(record.imageCapabilities);
     const normalizedDefaults = defaultParameters
         ? {
               ...(stringValue(defaultParameters.aspectRatio) ? { aspectRatio: stringValue(defaultParameters.aspectRatio) } : {}),
@@ -60,6 +63,7 @@ export function sanitizeChannelModelCatalogItem(value: unknown): ChannelModelCat
         ...(record.videoPricing !== undefined || seedancePortraitModel(id) ? { videoPricing: sanitizeVideoPriceQuote(record.videoPricing) } : {}),
         modelType: ["text", "image", "video", "audio"].includes(modelType) ? (modelType as ChannelModelCatalogItem["modelType"]) : undefined,
         supportedEndpointTypes: stringArray(record.supportedEndpointTypes),
+        ...(imageCapabilities && stringValue(record.imageCapabilitiesVersion) ? { imageCapabilities, imageCapabilitiesVersion: stringValue(record.imageCapabilitiesVersion) } : {}),
         defaultParameters: normalizedDefaults,
         options: normalizedOptions,
         supportsImages: typeof record.supportsImages === "boolean" ? record.supportsImages : undefined,
@@ -143,38 +147,55 @@ export function mergeFetchedChannelModelProfiles(channel: ModelChannel, catalog:
     const next: ChannelModelProfile[] = [];
     for (const item of catalog) {
         const existing = existingByModel.get(item.id);
+        const managed = channel.id === "beefapi" || channel.credentialRef === "beefapi-enterprise";
         const mapped = catalogModelMapping(item, { providerNameFallback: isBeefAPICatalogChannel(channel) });
-        const inferredProtocol = mapped.protocol || (isBeefAPICatalogChannel(channel) ? protocolForBeefAPICatalog(item.supportedEndpointTypes) : protocolForModelCatalog(item.supportedEndpointTypes));
-        const catalogVideo = isBeefAPICatalogChannel(channel) ? sanitizeServerVideoCapability(item.videoCapabilities) : null;
+        const catalogVideo = isBeefAPICatalogChannel(channel) ? versionedVideoCapability(item.videoCapabilities, item.videoCapabilitiesVersion) : null;
+        const inferredProtocol = catalogVideo && managed ? "openai-videos" : mapped.protocol || (isBeefAPICatalogChannel(channel) ? protocolForBeefAPICatalog(item.supportedEndpointTypes) : protocolForModelCatalog(item.supportedEndpointTypes));
         // BeefAPI may advertise generic OpenAI endpoints without modelType.
         // Its explicit video contract still identifies the profile and its quote.
-        const inferredCapability = mapped.capability || modelProtocolCapability(inferredProtocol) || item.modelType || (catalogVideo ? "video" : undefined);
+        const inferredCapability = (catalogVideo ? "video" : undefined) || mapped.capability || item.modelType || modelProtocolCapability(inferredProtocol);
+        const sourcedImage = isBeefAPICatalogChannel(channel) && inferredCapability === "image" && item.imageCapabilitiesVersion ? sanitizeServerImageCapability(item.imageCapabilities) : null;
         if (mapped.skipGeneration) {
             continue;
         }
         if (existing) {
+            if (!catalogVideo && managed && (!item.modelType || item.modelType === "video") && versionedVideoCapability(existing.capabilityConfig?.video, existing.videoCapabilitiesVersion)) {
+                next.push({ ...existing, ...(item.displayName ? { displayName: item.displayName } : {}), videoPricing: sanitizeVideoPriceQuote(item.videoPricing) });
+                continue;
+            }
+            if (!sourcedImage && isBeefAPICatalogChannel(channel) && inferredCapability === "image" && existing.imageCapabilitiesVersion && sanitizeServerImageCapability(existing.capabilityConfig?.image)) {
+                next.push({ ...existing, ...(item.displayName ? { displayName: item.displayName } : {}) });
+                continue;
+            }
+            if (sourcedImage) {
+                next.push({ ...existing, model: item.id, capability: "image", protocol: inferredProtocol || "openai-image", ...(item.displayName ? { displayName: item.displayName } : {}), capabilityConfig: { version: 1, image: sourcedImage }, imageCapabilitiesVersion: item.imageCapabilitiesVersion });
+                continue;
+            }
             const protocol = inferredProtocol || existing.protocol;
             const capability = inferredCapability || existing.capability;
             const capabilityChanged = capability !== existing.capability;
             const sourcedVideo = capability === "video" ? catalogVideo : null;
-            const keepSourced = isBeefAPICatalogChannel(channel) && existing.videoCapabilitiesVersion !== undefined && !sourcedVideo;
-            const patchCapabilityConfig = !keepSourced && !sourcedVideo && hasCatalogCapabilityConfig(item) && (capability === "image" || capability === "video");
+            const keepSourced = isBeefAPICatalogChannel(channel) && capability === "video" && Boolean(versionedVideoCapability(existing.capabilityConfig?.video, existing.videoCapabilitiesVersion)) && !sourcedVideo;
+            const missingManagedVideo = managed && capability === "video" && !sourcedVideo && !keepSourced;
+            const patchCapabilityConfig = !missingManagedVideo && !keepSourced && !sourcedVideo && hasCatalogCapabilityConfig(item) && (capability === "image" || capability === "video");
             const capabilityConfig = sourcedVideo
                 ? { version: 1, video: sourcedVideo }
                 : keepSourced
                   ? existing.capabilityConfig
-                  : patchCapabilityConfig
+                  : missingManagedVideo ? undefined : patchCapabilityConfig
                     ? catalogCapabilityConfig(item, protocol || channel.interfaceType, capability, capabilityChanged ? undefined : existing.capabilityConfig, false)
                     : capabilityChanged
                       ? undefined
                       : existing.capabilityConfig;
             next.push({
                 ...existing,
+                ...(existing.imageCapabilitiesVersion !== undefined ? { imageCapabilitiesVersion: "", capabilityConfig: undefined } : {}),
                 ...(item.videoPricing !== undefined || existing.videoPricing !== undefined || seedancePortraitModel(item.id) ? { videoPricing: sanitizeVideoPriceQuote(item.videoPricing) } : {}),
                 ...(item.displayName ? { displayName: item.displayName } : {}),
                 capability,
                 ...(protocol ? { protocol } : {}),
-                ...(patchCapabilityConfig || capabilityChanged || sourcedVideo || keepSourced ? { capabilityConfig } : {}),
+                ...(patchCapabilityConfig || capabilityChanged || sourcedVideo || keepSourced || missingManagedVideo ? { capabilityConfig } : {}),
+                ...(missingManagedVideo ? { videoCapabilitiesVersion: undefined } : {}),
                 ...(sourcedVideo ? { videoCapabilitiesVersion: item.videoCapabilitiesVersion ?? "" } : {}),
             });
             continue;
@@ -184,13 +205,14 @@ export function mergeFetchedChannelModelProfiles(channel: ModelChannel, catalog:
         const protocol = inferredProtocol || protocolTemplateForNewCatalogModel(capability, channel.interfaceType);
         if (!protocol || !capability) continue;
         const sourcedVideo = capability === "video" ? catalogVideo : null;
-        const capabilityConfig = sourcedVideo
+        const capabilityConfig = sourcedImage ? { version: 1, image: sourcedImage } : sourcedVideo
             ? { version: 1, video: sourcedVideo }
-            : capability === "image" || capability === "video"
+            : managed && capability === "video" ? undefined : capability === "image" || capability === "video"
               ? catalogCapabilityConfig(item, protocol, capability, undefined, true)
               : undefined;
         next.push({
             model: item.id,
+            ...(sourcedImage ? { imageCapabilitiesVersion: item.imageCapabilitiesVersion } : {}),
             ...(item.videoPricing !== undefined || seedancePortraitModel(item.id) ? { videoPricing: sanitizeVideoPriceQuote(item.videoPricing) } : {}),
             ...(item.displayName ? { displayName: item.displayName } : {}),
             capability,
@@ -287,16 +309,18 @@ function compactCatalogItem(item: ChannelModelCatalogItem): ChannelModelCatalogI
         ...(item.supportsImages !== undefined ? { supportsImages: item.supportsImages } : {}),
         ...(item.minImages !== undefined ? { minImages: item.minImages } : {}),
         ...(item.maxImages !== undefined ? { maxImages: item.maxImages } : {}),
+        ...(item.imageCapabilities ? { imageCapabilities: item.imageCapabilities, imageCapabilitiesVersion: item.imageCapabilitiesVersion } : {}),
         ...(item.videoCapabilities ? { videoCapabilities: item.videoCapabilities, videoCapabilitiesVersion: item.videoCapabilitiesVersion ?? "" } : {}),
     };
 }
 
 function catalogVideoFields(record: Record<string, unknown>): Pick<ChannelModelCatalogItem, "videoCapabilities" | "videoCapabilitiesVersion"> {
-    const video = sanitizeServerVideoCapability(record.videoCapabilities);
-    if (!video) return {};
+    const version = typeof record.videoCapabilitiesVersion === "string" ? record.videoCapabilitiesVersion.trim() : "";
+    const video = versionedVideoCapability(record.videoCapabilities, version);
+    if (!video || !version) return {};
     return {
         videoCapabilities: video,
-        videoCapabilitiesVersion: typeof record.videoCapabilitiesVersion === "string" ? record.videoCapabilitiesVersion.trim() : "",
+        videoCapabilitiesVersion: version,
     };
 }
 

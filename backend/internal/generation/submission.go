@@ -11,6 +11,12 @@ import (
 
 type SubmissionUnknownError struct{ Cause error }
 
+// SubmissionRejectedError proves a structured gateway rejection without a job.
+type SubmissionRejectedError struct{ Cause error }
+
+func (e SubmissionRejectedError) Error() string { return e.Cause.Error() }
+func (e SubmissionRejectedError) Unwrap() error { return e.Cause }
+
 // RequestNotSentError is created only from transport evidence: no HTTP
 // connection was acquired during this request, including any redirects.
 type RequestNotSentError struct{ Cause error }
@@ -26,6 +32,13 @@ func (e RequestPreparationError) Error() string {
 	return fmt.Sprintf("本次请求准备失败：%v", e.Cause)
 }
 func (e RequestPreparationError) Unwrap() error { return e.Cause }
+
+// ProtocolPreparationError is emitted only by local interface validation before
+// a new create request; provider messages cannot attest this failure phase.
+type ProtocolPreparationError struct{ Cause error }
+
+func (e ProtocolPreparationError) Error() string { return e.Cause.Error() }
+func (e ProtocolPreparationError) Unwrap() error { return RequestPreparationError{Cause: e.Cause} }
 
 // ReferenceStoragePreparationError is local object-storage work that failed
 // before model dispatch, even if that work acquired its own HTTP connection.
@@ -49,6 +62,10 @@ func SafeRouteRejection(err error) bool {
 	var unknown SubmissionUnknownError
 	if errors.As(err, &unknown) {
 		return false
+	}
+	var rejected SubmissionRejectedError
+	if errors.As(err, &rejected) {
+		return true
 	}
 	var preparation RequestPreparationError
 	if errors.As(err, &preparation) {

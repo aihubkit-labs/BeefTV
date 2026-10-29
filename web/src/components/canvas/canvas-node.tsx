@@ -3,10 +3,11 @@ import type { ReactNode } from "react";
 import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, Copy, Download, FileText, GripVertical, Image as ImageIcon, Lock, Maximize2, Move3d, Music2, Pencil, RefreshCw, ScanSearch, Settings2, Star, Trash2, Video, WandSparkles } from "lucide-react";
 
 import { useCanvasNodeActions } from "./canvas-node-action-context";
-import { shouldBlockManualRetry } from "@/lib/generation-error";
+import { canReloadCanvasNodeResource, isNodeRegenerateBlocked } from "@/lib/task-outcome";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { canvasConnectionTilt } from "@/lib/canvas/canvas-connection-tilt";
+import { usesCanvasCustomNodeContent } from "@/lib/canvas/canvas-node-content-policy";
 import { storyboardMinNodeHeight } from "@/lib/canvas/canvas-storyboard-layout";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type CanvasNodeTypeId, type Position } from "@/types/canvas";
@@ -350,7 +351,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             }}
             onContextMenu={(event) => onContextMenu(event, data.id)}
         >
-            <NodeExternalHeader
+            {!data.metadata?.reusableWorkflow ? <NodeExternalHeader
                 node={data}
                 scale={scale}
                 dimensionLabel={null}
@@ -364,7 +365,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 onEdit={() => setIsEditingTitle(true)}
                 onCommit={commitTitle}
                 onCancel={() => { setTitleDraft(data.title); setIsEditingTitle(false); }}
-            />
+            /> : null}
             <div
                 className="canvas-node-shell relative h-full w-full overflow-visible rounded-[var(--node-radius)]"
                 data-node-selected={isSelected ? "true" : "false"}
@@ -412,7 +413,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }}
             >
                 <div
-                    className={`relative flex h-full w-full items-center justify-center rounded-[inherit] ${annotationActive || maskEditActive || (imageCropActive && hasImageContent) || (videoCropActive && hasVideoContent) || isBatchRoot || data.type === CanvasNodeType.Script || data.type === CanvasNodeType.BatchTable || isComposerNode ? "overflow-visible" : "overflow-hidden"}`}
+                    className={`relative flex h-full w-full items-center justify-center rounded-[inherit] ${annotationActive || maskEditActive || (imageCropActive && hasImageContent) || (videoCropActive && hasVideoContent) || isBatchRoot || data.type === CanvasNodeType.Script || data.type === CanvasNodeType.BatchTable || data.type === CanvasNodeType.Upscale || isComposerNode ? "overflow-visible" : "overflow-hidden"}`}
                     style={
                         {
                             background: hasImageContent || hasVideoContent || hasAudioContent || isDirectorNode ? "transparent" : theme.node.fill,
@@ -426,7 +427,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 >
                     {/* 仅在执行中或异常时显示状态；成功来源由内部元数据保留，不占用卡片视觉层。 */}
                     {data.metadata?.status && data.metadata.status !== "idle" && data.metadata.status !== "success" && data.type !== CanvasNodeType.Frame ? (
-                        <NodeStatusBadge status={data.metadata.status} resultPending={data.metadata.taskStatus === "succeeded" && data.metadata.resourceReloadAvailable === true} />
+                        <NodeStatusBadge status={data.metadata.status} resultPending={canReloadCanvasNodeResource(data)} />
                     ) : null}
                     <CanvasNodeContent
                         node={data}
@@ -441,6 +442,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         batchRecovering={batchRecovering}
                         renderNodeContent={renderNodeContent}
                         drawingProjectId={drawingProjectId}
+                        projectId={drawingProjectId}
                         mentionReferences={mentionReferences}
                         onContentChange={onContentChange}
                         onStopEditing={() => setIsEditingContent(false)}
@@ -553,8 +555,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                             {hasImageContent ? (
                                 <BatchChildActionButton theme={theme} label={batchPrimary ? "当前主图" : "设为主图"} icon={<Star className={`size-3.5 ${batchPrimary ? "fill-current" : ""}`} style={{ color: theme.accent.primary }} />} onClick={() => onSetBatchPrimary?.(data)} />
                             ) : null}
-                            {data.metadata?.status === "error" && data.metadata.resourceReloadAvailable ? <BatchChildActionButton theme={theme} label="继续取回" icon={<Download className="size-3.5" />} onClick={() => onReloadResource?.(data)} /> : null}
-                            {data.metadata?.status === "error" && !shouldBlockManualRetry({ code: data.metadata.generationErrorCode || data.metadata.taskErrorCode, message: data.metadata.errorDetails }, data.metadata.taskStage) ? <BatchChildActionButton theme={theme} label="重新生成" icon={<RefreshCw className="size-3.5" />} onClick={() => onRetry?.(data)} /> : null}
+                            {data.metadata?.status === "error" && canReloadCanvasNodeResource(data) ? <BatchChildActionButton theme={theme} label="继续取回" icon={<Download className="size-3.5" />} onClick={() => onReloadResource?.(data)} /> : null}
+                            {data.metadata?.status === "error" && !isNodeRegenerateBlocked(data.metadata) ? <BatchChildActionButton theme={theme} label="重新生成" icon={<RefreshCw className="size-3.5" />} onClick={() => onRetry?.(data)} /> : null}
                             {data.metadata?.status === "error" && data.metadata.taskId && onOpenTaskDetails ? <BatchChildActionButton theme={theme} label="查看原任务" icon={<ScanSearch className="size-3.5" />} onClick={() => onOpenTaskDetails(data)} /> : null}
                             {data.metadata?.status === "error" ? <BatchChildActionButton theme={theme} label="删除" icon={<Trash2 className="size-3.5" />} danger onClick={() => deleteNode?.(data)} /> : null}
                         </div>
@@ -574,23 +576,12 @@ export const CanvasNode = React.memo(function CanvasNode({
                 </> : null}
             </div>
 
-            {!readOnly && data.type !== CanvasNodeType.Script && data.type !== CanvasNodeType.BatchTable ? <ConnectionSideRail side="left" scale={scale} theme={theme} visible={hovered || isSelected || forceInputVisible} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "target", undefined, anchorRatio)} /> : null}
+            {!readOnly && data.type !== CanvasNodeType.Script && data.type !== CanvasNodeType.BatchTable && data.type !== CanvasNodeType.WorkflowControl ? <ConnectionSideRail side="left" scale={scale} theme={theme} visible={hovered || isSelected || forceInputVisible} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "target", undefined, anchorRatio)} /> : null}
             {!readOnly && data.type !== CanvasNodeType.Script && data.type !== CanvasNodeType.Config && showOutputConnection ? <ConnectionSideRail side="right" scale={scale} theme={theme} visible={hovered || isSelected} onPointerDown={(event, anchorRatio) => onConnectStart(event, data.id, "source", undefined, anchorRatio)} /> : null}
 
         </div>
     );
 }, areCanvasNodePropsEqual);
-
-function usesCustomNodeContentRenderer(node: CanvasNodeData) {
-    return (
-        node.type === CanvasNodeType.Config ||
-        node.type === CanvasNodeType.Script ||
-        node.type === CanvasNodeType.BatchTable ||
-        node.type === CanvasNodeType.Director ||
-        Boolean(node.metadata?.directorSceneId) ||
-        Boolean(node.metadata?.workflowKind)
-    );
-}
 
 function areCanvasNodePropsEqual(previous: CanvasNodeProps, next: CanvasNodeProps) {
     return (
@@ -611,7 +602,7 @@ function areCanvasNodePropsEqual(previous: CanvasNodeProps, next: CanvasNodeProp
         previous.readOnly === next.readOnly &&
         previous.resourceLabel === next.resourceLabel &&
         previous.mentionReferences === next.mentionReferences &&
-        (!usesCustomNodeContentRenderer(next.data) || previous.renderNodeContent === next.renderNodeContent) &&
+        (!usesCanvasCustomNodeContent(next.data) || previous.renderNodeContent === next.renderNodeContent) &&
         previous.drawingProjectId === next.drawingProjectId &&
         previous.batchCount === next.batchCount &&
         previous.batchPreviewNodes === next.batchPreviewNodes &&
@@ -734,16 +725,15 @@ function NodeExternalHeader({ node, scale, dimensionLabel, active, editable, edi
     const inverseScale = 1 / Math.max(scale, 0.05);
     const isDirectorNode = node.type === CanvasNodeType.Director || Boolean(node.metadata?.directorSceneId);
     const Icon = isDirectorNode ? Move3d : nodeTypeIcon(node.type);
-    const directorCardWidth = Math.min(node.width, node.height);
 
     return (
         <div
             className="canvas-node-external-header absolute bottom-full left-0 z-[var(--node-z-overlay)] flex min-h-6 items-center gap-1"
+            data-canvas-live-scale
             data-expanded={active || editing ? "true" : undefined}
             data-editing={editing ? "true" : undefined}
             style={{
-                left: node.metadata?.directorSceneId ? Math.max(0, (node.width - directorCardWidth) / 2) : undefined,
-                "--canvas-node-width": `${node.metadata?.directorSceneId ? directorCardWidth : node.width}px`,
+                "--canvas-node-width": `${node.width}px`,
                 "--canvas-node-header-width": `min(240px, calc(var(--canvas-node-width) * var(--canvas-live-scale, ${scale})))`,
                 borderRadius: "var(--r-sm)",
                 color: active ? theme.node.text : theme.node.label,
@@ -906,12 +896,15 @@ function ConnectionSideRail({ side, scale, theme, visible = false, onPointerDown
                 resetHandle();
             }}
             onPointerDown={(event) => onPointerDown(event, 0.5)}
+            onFocus={() => setRailHovered(true)}
+            onBlur={() => { setRailHovered(false); resetHandle(); }}
             aria-label={`${side === "left" ? "输入" : "输出"}连接点，单击创建节点或拖动连线`}
         >
             <span
                 ref={handleRef}
                 className="absolute left-1/2 top-1/2 block transition-transform duration-[80ms] ease-out group-hover:brightness-125 group-focus-visible:brightness-125"
                 style={{
+                    display: visible || railHovered ? undefined : "none",
                     width: handleSize,
                     height: handleSize,
                     marginLeft: -handleSize / 2,
@@ -919,7 +912,7 @@ function ConnectionSideRail({ side, scale, theme, visible = false, onPointerDown
                     transform: `translate(${sideOffset}px, 0) scale(1)`,
                     transition: "transform 80ms ease-out",
                     transformOrigin: "center",
-                    willChange: "transform",
+                    willChange: railHovered ? "transform" : undefined,
                 }}
             >
                 <svg

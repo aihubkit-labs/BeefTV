@@ -13,7 +13,7 @@ import (
 )
 
 // RegisterDefaultOps 注册全部对外操作（手工 UI、CLI、MCP 与内置助手共用）。
-// 付费生成只经 canvas.generation.propose 提议、由界面确认后执行；
+// 内置助手的付费生成先提议、由界面确认；外部客户端负责自身执行审批。
 // 未经参数与费用风险验收的能力明确不注册，而不是提供 stub 伪成功。
 func RegisterDefaultOps(r *Registry) {
 	registerCanvasEditOps(r)
@@ -21,10 +21,15 @@ func RegisterDefaultOps(r *Registry) {
 	registerModelCatalogOp(r)
 	registerMediaOps(r)
 	registerSkillOps(r)
+	registerSkillMarketOps(r)
+	registerSkillPublishingOps(r)
 	registerProjectSearchOps(r)
 	registerCanvasTimelineOps(r)
 	registerCanvasRenderOps(r)
 	registerCanvasNodeConfigureOps(r)
+	registerStoryboardPreparation(r)
+	registerGenerationSubmit(r)
+	registerCanvasProjectExportOps(r)
 	r.Register(Op{AssistantCanvas: true, ID: "canvas.get", Summary: "读取指定画布的完整内容（节点与连线）", ReadOnly: true, Scope: ScopeCanvas,
 		Params:  json.RawMessage(`{"type":"object","properties":{"canvasId":{"type":"string"}},"required":["canvasId"]}`),
 		Handler: opCanvasGet})
@@ -62,9 +67,9 @@ func RegisterDefaultOps(r *Registry) {
 		Handler: opCanvasDocumentCommit})
 	// 付费生成只提议不执行：这里校验目标并给出用户要确认的模型，真正的生成由界面在用户确认后发起。
 	r.Register(Op{AssistantProposal: true, AssistantCanvas: true, ID: "canvas.generation.propose", Summary: "提议对选中节点做付费图片/视频生成（只登记提议，不生成、不扣费）", ReadOnly: true, Scope: ScopeCanvas,
-		Params:  json.RawMessage(`{"type":"object","properties":{"canvasId":{"type":"string"},"nodeIds":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":8},"kind":{"type":"string","enum":["image","video"]},"note":{"type":"string"}},"required":["canvasId","nodeIds","kind"]}`),
+		Params:  json.RawMessage(`{"type":"object","properties":{"canvasId":{"type":"string"},"nodeIds":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":8},"kind":{"type":"string","enum":["image","video","audio"]},"productionNodeIds":{"type":"array","items":{"type":"string"},"maxItems":24,"description":"完整制作时，先准备所有首帧、视频和旁白草稿，将全部计划生成的节点列在这里，一次确认后后台继续；nodeIds仍只列当前依赖已就绪的首批"},"note":{"type":"string"}},"required":["canvasId","nodeIds","kind"]}`),
 		Handler: opCanvasGenerationPropose})
-	r.Register(Op{ReplaySafe: true, AssistantCanvas: true, ID: "canvas.task.bind", Summary: "把已交付的任务产物绑定到原画布节点（校验归属与就绪资源，带 revision CAS，幂等回执）", Scope: ScopeCanvas,
+	r.Register(Op{ReplaySafe: true, AssistantCanvas: true, ID: "canvas.task.bind", Summary: "把已交付任务产物绑定到原节点；同画布本地时间线成片可绑定到空 video 节点，绑定后用 nodeId 检查成片（校验归属、就绪资源与版本，幂等回执）", Scope: ScopeCanvas,
 		Params:  json.RawMessage(`{"type":"object","properties":{"canvasId":{"type":"string"},"taskId":{"type":"string"},"nodeId":{"type":"string"},"outputIndex":{"type":"integer"}},"required":["canvasId","taskId","nodeId"]}`),
 		Handler: opCanvasTaskBind, ProjectReplay: projectCanvasTaskBindReplay})
 	r.Register(Op{ID: "conversation.message.attach", Summary: "把已交付的任务产物绑定到原对话消息（校验归属与就绪资源，带 revision CAS，幂等回执）", Scope: ScopeConversation,
@@ -74,10 +79,11 @@ func RegisterDefaultOps(r *Registry) {
 
 func opCanvasGenerationPropose(ctx *Context, params json.RawMessage) (any, error) {
 	var args struct {
-		CanvasID string   `json:"canvasId"`
-		NodeIDs  []string `json:"nodeIds"`
-		Kind     string   `json:"kind"`
-		Note     string   `json:"note"`
+		CanvasID          string   `json:"canvasId"`
+		NodeIDs           []string `json:"nodeIds"`
+		Kind              string   `json:"kind"`
+		Note              string   `json:"note"`
+		ProductionNodeIDs []string `json:"productionNodeIds"`
 	}
 	if err := decodeParams(params, &args); err != nil {
 		return nil, err
@@ -85,8 +91,8 @@ func opCanvasGenerationPropose(ctx *Context, params json.RawMessage) (any, error
 	if strings.TrimSpace(args.CanvasID) == "" {
 		return nil, InvalidArg("invalid_params", "canvasId 必填")
 	}
-	if args.Kind != "image" && args.Kind != "video" {
-		return nil, InvalidArg("invalid_kind", "kind 只能是 image 或 video")
+	if args.Kind != "image" && args.Kind != "video" && args.Kind != "audio" {
+		return nil, InvalidArg("invalid_kind", "kind 只能是 image、video 或 audio")
 	}
 	if len(args.NodeIDs) == 0 || len(args.NodeIDs) > 8 {
 		return nil, InvalidArg("invalid_batch", "nodeIds 必须是 1..8 项的数组")
@@ -149,16 +155,66 @@ func opCanvasGenerationPropose(ctx *Context, params json.RawMessage) (any, error
 			return nil, InvalidArg("mixed_generation_models", "这些节点当前选用了不同的模型，请按模型分开提出生成")
 		}
 	}
-	return map[string]any{
-		"proposalId": newProposalID(), "kind": args.Kind, "nodeIds": nodeIDs,
+	if err := validateGenerationDependencies(doc, owned, nodeIDs, args.Kind); err != nil {
+		return nil, err
+	}
+	proposalID := newProposalID()
+	result := map[string]any{
+		"proposalId": proposalID, "kind": args.Kind, "nodeIds": nodeIDs,
 		"model": resolved.Display, "modelKey": resolved.ModelKey, "note": strings.TrimSpace(args.Note),
 		"source": map[string]any{"canvasId": args.CanvasID, "canvasRevision": doc["revision"], "modelConfigRevision": resolved.Revision},
-	}, nil
+	}
+	var proposedTargets []GenerationTarget
+	if len(args.ProductionNodeIDs) > 0 {
+		targets, err := GenerationTargets(ctx.Domain, doc, args.ProductionNodeIDs)
+		if err != nil {
+			return nil, err
+		}
+		included := map[string]bool{}
+		for _, target := range targets {
+			included[target.NodeID] = true
+		}
+		for _, id := range nodeIDs {
+			if !included[id] {
+				return nil, InvalidArg("production_target_missing", "首批素材必须包含在整片制作计划中")
+			}
+		}
+		proposedTargets = targets
+		result["production"] = map[string]any{"targets": targets}
+	}
+	if strings.TrimSpace(ctx.TurnID) != "" {
+		if recorder, ok := ctx.Domain.(ProposedGenerationRecorder); ok {
+			if len(proposedTargets) == 0 {
+				var err error
+				proposedTargets, err = GenerationTargets(ctx.Domain, doc, nodeIDs)
+				if err != nil {
+					return nil, AsError(err)
+				}
+			}
+			if err := recorder.RecordAssistantGenerationProposal(ctx.UserID, ctx.TurnID, args.CanvasID, GenerationAuthorization{
+				ProposalID: proposalID,
+				Targets:    proposedTargets,
+			}); err != nil {
+				return nil, AsError(err)
+			}
+		}
+	}
+	if ctx.Caller.Kind == CallerExternal && !ctx.Caller.ReadOnly {
+		result["nextAction"] = map[string]any{
+			"operation": "canvas.generation.submit", "approval": "external-client",
+			"params":  map[string]any{"canvasId": args.CanvasID, "nodeIds": nodeIDs, "kind": args.Kind, "expectedRevision": doc["revision"], "expectedModelConfigRevision": resolved.Revision},
+			"message": "本次提议尚未生成或扣费。由外部调用方确认后，使用稳定 operationId 提交；无需寻找内置助手确认卡。",
+		}
+	}
+	return result, nil
 }
 
 func generationKindLabel(kind string) string {
 	if kind == "video" {
 		return "视频"
+	}
+	if kind == "audio" {
+		return "音频"
 	}
 	return "图片"
 }
@@ -334,7 +390,7 @@ func opTaskGet(ctx *Context, params json.RawMessage) (any, error) {
 	}
 	return map[string]any{
 		"taskId": task.ID, "type": task.Type, "status": task.Status, "progress": task.Progress,
-		"outputs": task.Outputs, "resultState": task.ResultState,
+		"outputs": task.Outputs, "resultState": task.ResultState, "delivery": task.Delivery,
 		"createdAt": task.CreatedAt, "updatedAt": task.UpdatedAt,
 	}, nil
 }

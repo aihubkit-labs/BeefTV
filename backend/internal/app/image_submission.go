@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/repository"
 )
 
 const imageRecoveryMaxSends = 12
@@ -26,6 +28,7 @@ type imageAttemptContext struct{}
 type imageTaskContext struct{}
 
 type imageWireRequest struct {
+	ChannelID      string
 	URL            string
 	Header         http.Header
 	Body           []byte
@@ -45,7 +48,7 @@ func (s *Service) validateImageTaskRetry(task *model.Task) error {
 	}
 	row, err := s.repo.ImageSubmission(attempt.ID, task.ID, task.UserID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if attempt.DispatchState == "submission_unknown" || attempt.DispatchState == "accepted" {
+		if attempt.DispatchState == "accepted" || attempt.DispatchState == "submission_unknown" {
 			return BadAuthRequest("图片请求可能已经生成，请保留任务记录并联系支持查询结果，不要重复提交")
 		}
 		return nil
@@ -64,6 +67,51 @@ func definiteImageThrottle(err error) bool {
 	return !isImageRecoveryError(err) && errors.As(err, &upstream) && upstream.StatusCode == 429 && classifyProviderHTTP(upstream).Category == generation.CategoryThrottled
 }
 
+func definiteMidjourneyCountRejection(err error) bool {
+	var upstream providerHTTPError
+	if !errors.As(err, &upstream) || upstream.StatusCode < 400 {
+		return false
+	}
+	var body struct {
+		TaskID string `json:"task_id"`
+		ID     string `json:"id"`
+		Error  struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			TaskID  string `json:"task_id"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(upstream.Body), &body) != nil || body.TaskID != "" || body.ID != "" || body.Error.TaskID != "" {
+		return false
+	}
+	return body.Error.Code == "invalid_request" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(body.Error.Message)), "midjourney generates four images per request; n must be 4 or omitted")
+}
+
+// A structured VOD parameter failure is a terminal response, even if VOD created
+// a task before rejecting its parameters. It is never evidence for an automatic resend.
+func definiteVODImageParameterFailure(err error) bool {
+	if isImageRecoveryError(err) {
+		return false
+	}
+	var unknown generation.SubmissionUnknownError
+	if errors.As(err, &unknown) {
+		return false
+	}
+	var upstream providerHTTPError
+	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(upstream.Body), &body) != nil {
+		return false
+	}
+	return body.Error.Code == "vod_image_invalid_params" || body.Error.Code == "vod_image_invalid_media"
+}
+
 func isImageRecoveryError(err error) bool {
 	var recovery imageRecoveryError
 	return errors.As(err, &recovery)
@@ -72,6 +120,9 @@ func isImageRecoveryError(err error) bool {
 // Only a definite gateway rate-limit rejection can start a new paid attempt.
 // The executor caps the entire logical task to three attempts and backs off.
 func (s *Service) retryRejectedImageAttempt(task *model.Task, previous *model.RouteAttempt, taskErr error) (*model.RouteAttempt, error) {
+	if config, ok := s.resolveImageRecoveryConfig(*task); ok && config.CredentialRef == beefapi.CredentialRef {
+		return nil, nil
+	}
 	if previous.DispatchState != "rejected_no_job" || !definiteImageThrottle(taskErr) {
 		return nil, nil
 	}
@@ -96,6 +147,9 @@ func (s *Service) retryRejectedImageAttempt(task *model.Task, previous *model.Ro
 	var wire imageWireRequest
 	if err := json.Unmarshal([]byte(plain), &wire); err != nil {
 		return nil, err
+	}
+	if managedFrozenImage(*task, wire) {
+		return nil, nil
 	}
 	key, _ := withProviderSubmissionKey(context.Background(), attempt).Value(providerSubmissionKeyContext{}).(string)
 	wire.Header.Set("Idempotency-Key", key)
@@ -125,6 +179,9 @@ func (s *Service) shouldDeferImageRecovery(task model.Task, taskErr error, provi
 		return false
 	}
 	row, err := s.repo.ImageSubmission(attempt.ID, task.ID, task.UserID)
+	if err == nil && (managedTaskConnection(task) || attempt.ChannelID == beefapi.ChannelID || row.QueryCipher != "") {
+		return true
+	}
 	if err != nil || row.RequestCipher == "" || time.Since(row.CreatedAt) >= imageRecoveryLifetime {
 		return false
 	}
@@ -179,7 +236,7 @@ func recoverableImageEndpoint(req *http.Request) bool {
 // Recoverable BeefAPI canvas_image routes fail closed when the bound owner or
 // attempt identity is missing; other hosts decline so the normal POST proceeds.
 func prepareImageSubmission(s *Service, req *http.Request) (*model.ImageSubmission, bool, error) {
-	if req == nil || !recoverableImageEndpoint(req) {
+	if req == nil || (!recoverableImageEndpoint(req) && !isManagedMediaRequest(req)) {
 		return nil, false, nil
 	}
 	if s == nil {
@@ -220,7 +277,22 @@ func prepareImageSubmission(s *Service, req *http.Request) (*model.ImageSubmissi
 	header := req.Header.Clone()
 	header.Del("X-Idempotency-Key")
 	header.Set("Idempotency-Key", key)
-	raw, err := json.Marshal(imageWireRequest{URL: req.URL.String(), Header: header, Body: body, ReplayProtocol: generation.ImageReplayProtocol})
+	original, err := s.repo.LatestRouteAttempt(task.ID)
+	if err != nil {
+		return nil, true, err
+	}
+	if original.ID != attemptID {
+		return nil, true, generation.ErrImageOwnerMissing
+	}
+	channelID := firstNonEmpty(original.ChannelID, call.ChannelID)
+	if channelID == "" && beefapi.IsEnterpriseBaseURL(req.URL.String()) {
+		channelID = beefapi.ChannelID
+	}
+	protocol := generation.ImageReplayProtocol
+	if isManagedMediaRequest(req) {
+		protocol = beefapi.MediaProtocolVersion
+	}
+	raw, err := json.Marshal(imageWireRequest{ChannelID: channelID, URL: req.URL.String(), Header: header, Body: body, ReplayProtocol: protocol})
 	if err != nil {
 		return nil, true, err
 	}
@@ -229,12 +301,33 @@ func prepareImageSubmission(s *Service, req *http.Request) (*model.ImageSubmissi
 		return nil, true, err
 	}
 	row = &model.ImageSubmission{AttemptID: attemptID, TaskID: task.ID, UserID: task.UserID, RequestCipher: cipher, CreatedAt: time.Now()}
+	var wire imageWireRequest
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, true, err
+	}
+	row.QueryCipher, err = s.managedImageQueryCipher(task, wire)
+	if err != nil {
+		return nil, true, err
+	}
+	if err := s.expireImageSubmissionRequests(); err != nil {
+		return nil, true, err
+	}
 	if err := s.repo.CreateImageSubmission(row); err != nil {
 		return nil, true, err
 	}
 	// A concurrent claimant can only use the first committed request.
 	row, err = s.repo.ImageSubmission(attemptID, task.ID, task.UserID)
 	return row, true, err
+}
+
+func (s *Service) imageSubmissionWire(row *model.ImageSubmission) (imageWireRequest, error) {
+	var wire imageWireRequest
+	plain, err := s.decryptSettingSecret(row.RequestCipher)
+	if err != nil {
+		return wire, err
+	}
+	err = json.Unmarshal([]byte(plain), &wire)
+	return wire, err
 }
 
 func (s *Service) sendImageSubmission(ctx context.Context, task model.Task, row *model.ImageSubmission) ([]byte, string, error) {
@@ -244,19 +337,27 @@ func (s *Service) sendImageSubmission(ctx context.Context, task model.Task, row 
 }
 
 func (s *Service) sendImageSubmissionWith(ctx context.Context, task model.Task, row *model.ImageSubmission, send func(*http.Request, func() error) ([]byte, string, error), wait func(context.Context, time.Duration) error) ([]byte, string, error) {
+	return s.sendImageSubmissionWithMode(ctx, task, row, send, wait, false)
+}
+
+// singleReplay 只用于失败任务的后台同键取回，每轮最多发一次。
+func (s *Service) sendImageSubmissionWithMode(ctx context.Context, task model.Task, row *model.ImageSubmission, send func(*http.Request, func() error) ([]byte, string, error), wait func(context.Context, time.Duration) error, singleReplay bool) ([]byte, string, error) {
+	maxSends := imageRecoveryMaxSends
+	if singleReplay {
+		maxSends = 0
+	}
 	if row.TaskID != task.ID || row.UserID != task.UserID {
 		return nil, "", imageRecoveryError{errors.New("图片任务归属不一致")}
 	}
-	if row.RequestCipher == "" || time.Since(row.CreatedAt) >= imageRecoveryLifetime || (!row.ResponseAccepted && row.SendCount >= imageRecoveryMaxSends) {
+	if row.RequestCipher == "" || time.Since(row.CreatedAt) >= imageRecoveryLifetime || (!singleReplay && !row.ResponseAccepted && row.SendCount >= imageRecoveryMaxSends) {
 		return nil, "", imageRecoveryError{errors.New("图片结果恢复等待已结束")}
 	}
-	plain, err := s.decryptSettingSecret(row.RequestCipher)
+	wire, err := s.imageSubmissionWire(row)
 	if err != nil {
 		return nil, "", imageRecoveryError{err}
 	}
-	var wire imageWireRequest
-	if err := json.Unmarshal([]byte(plain), &wire); err != nil {
-		return nil, "", imageRecoveryError{err}
+	if managedFrozenImage(task, wire) {
+		return nil, "", imageRecoveryError{errors.New("BeefAPI 图片任务只能按原编号查询")}
 	}
 	deadline := time.Now().Add(imageRecoveryWait)
 	if expires := row.CreatedAt.Add(imageRecoveryLifetime); expires.Before(deadline) {
@@ -289,15 +390,39 @@ func (s *Service) sendImageSubmissionWith(ctx context.Context, task model.Task, 
 			if err := ctx.Err(); err != nil {
 				return imageRecoveryError{err}
 			}
-			if err := s.repo.ClaimImageSubmissionSend(row, task.LeaseOwner, imageRecoveryMaxSends); err != nil {
+			if singleReplay || row.SendCount > 0 || row.ResponseAccepted {
+				attempt, err := s.repo.LatestRouteAttempt(task.ID)
+				if err != nil {
+					return imageRecoveryError{err}
+				}
+				if attempt.ID != row.AttemptID || attempt.RouteRun != task.RouteRun {
+					return imageRecoveryError{repository.ErrTaskStateConflict}
+				}
+				available, err := s.imageRecoveryChannelAvailable(attempt, wire)
+				if err != nil {
+					return imageRecoveryError{err}
+				}
+				if !available {
+					return imageRecoveryError{errImageRecoveryIdentityUnavailable}
+				}
+			}
+			if err := s.repo.ClaimImageSubmissionSend(row, task.LeaseOwner, maxSends); err != nil {
 				return imageRecoveryError{err}
 			}
 			return nil
 		})
 		if sendErr == nil {
+			if len(data) > 0 && s.repo != nil {
+				if jobID := generation.ExtractBeefAPIImageJobID(nil, data); jobID != "" {
+					_ = s.repo.UpdateTaskImageJobID(task.ID, jobID)
+				}
+			}
 			if err := s.repo.MarkImageSubmissionAccepted(row); err != nil {
 				return nil, "", imageRecoveryError{err}
 			}
+			if singleReplay {
+				return data, mime, nil
+			} // 自动扫描还需区分 2xx 正文中的业务失败。
 			var payload imageResponse
 			if err := json.Unmarshal(data, &payload); err != nil {
 				return nil, "", imageRecoveryError{err}
@@ -306,6 +431,23 @@ func (s *Service) sendImageSubmissionWith(ctx context.Context, task model.Task, 
 				return nil, "", imageRecoveryError{err}
 			}
 			return data, mime, nil
+		}
+		if s.repo != nil {
+			var httpErr providerHTTPError
+			if errors.As(sendErr, &httpErr) && httpErr.Body != "" {
+				if jobID := generation.ExtractBeefAPIImageJobID(nil, []byte(httpErr.Body)); jobID != "" {
+					_ = s.repo.UpdateTaskImageJobID(task.ID, jobID)
+				}
+			}
+		}
+		if singleReplay {
+			return nil, "", imageRecoveryError{sendErr}
+		}
+		if definiteImageInputRejection(sendErr) && (row.ResponseAccepted || row.SendCount > 1) {
+			return nil, "", imageRecoveryError{sendErr}
+		}
+		if !row.ResponseAccepted && definiteMidjourneyCountRejection(sendErr) {
+			return nil, "", sendErr
 		}
 		if !retrySameImageSubmission(sendErr) {
 			var preparation generation.RequestPreparationError
@@ -336,6 +478,9 @@ func (s *Service) sendImageSubmissionWith(ctx context.Context, task model.Task, 
 }
 
 func retrySameImageSubmission(err error) bool {
+	if definiteMidjourneyCountRejection(err) {
+		return false
+	}
 	var preparation generation.RequestPreparationError
 	if errors.As(err, &preparation) {
 		return false
@@ -384,6 +529,9 @@ func (s *Service) recoverImageSubmission(ctx context.Context, task model.Task) (
 	}
 	if err != nil {
 		return nil, true, imageRecoveryError{err}
+	}
+	if result, managed, collectErr := s.collectManagedImage(ctx, task, row); managed {
+		return result, true, collectErr
 	}
 	data, _, err := s.sendImageSubmission(ctx, task, row)
 	if err != nil {

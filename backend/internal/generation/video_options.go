@@ -57,6 +57,14 @@ func IsBeefAPISeedancePreuploadConfig(ctx context.Context, config Config) bool {
 	return IsBeefAPIVideoConfig(ctx, config) && IsSeedanceVideoConfig(config)
 }
 
+func requiresBeefAPIHTTPReferences(ctx context.Context, config Config) bool {
+	if UpscaleMediaType(config.Model) != "" {
+		return IsBeefAPIVideoConfig(ctx, config)
+	}
+	contract, ok := providerpreset.BeefAPIVideoContract(config.Model)
+	return ok && contract.RequiresHTTPReferences && IsBeefAPIVideoConfig(ctx, config)
+}
+
 func IsGrokVideoConfig(config Config) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(config.Model)), "grok")
 }
@@ -94,6 +102,15 @@ func ImageParameterSupported(profile *ImageCapabilityConfig, parameter string) b
 		return profile.ResponseFormat.Supported
 	}
 	return profile.OutputFormat.Supported
+}
+
+// ImageResponseFormatValue 返回图片接口应发送的 response_format 取值。
+// 渠道没有显式选择时沿用 b64_json，保持既有行为不变。
+func ImageResponseFormatValue(profile *ImageCapabilityConfig) string {
+	if profile != nil && strings.EqualFold(strings.TrimSpace(profile.ResponseFormat.Value), modelcatalog.ImageResponseFormatURL) {
+		return modelcatalog.ImageResponseFormatURL
+	}
+	return modelcatalog.ImageResponseFormatBase64
 }
 
 func ImageQualitySupported(profile *ImageCapabilityConfig) bool {

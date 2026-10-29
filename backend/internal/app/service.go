@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -28,12 +29,15 @@ import (
 	"infinite-canvas/backend/internal/prompts"
 	"infinite-canvas/backend/internal/repository"
 	"infinite-canvas/backend/internal/skills"
+	"infinite-canvas/backend/internal/supporttrace"
 	localtask "infinite-canvas/backend/internal/task"
 	"infinite-canvas/backend/internal/taskdelivery"
 	"infinite-canvas/backend/internal/textreplay"
 )
 
 type Service struct {
+	canvasWorkflowMu         sync.Mutex
+	canvasWorkflowLoop       bool
 	repo                     *repository.Repository
 	dataDir                  string
 	mode                     serviceMode
@@ -69,12 +73,17 @@ type Service struct {
 	projects                 *localproject.Service
 	canvas                   *canvas.Service
 	assistantTurns           *assistantturns.Service
+	continuationBackground   assistantContinuationBackground
 	assets                   *localasset.Service
 	assetsOnce               sync.Once
 	appearance               *appearance.Service
 	appearanceOnce           sync.Once
 	diagnostics              *diagnostics.Service
 	diagnosticsOnce          sync.Once
+	supportTraceOnce         sync.Once
+	supportTraceRecorder     *supporttrace.Recorder
+	supportTraceErr          error
+	supportTraceClosed       atomic.Bool
 	playback                 *playback.Service
 	playbackOnce             sync.Once
 	depthCapture             *depthcapture.Service
@@ -85,6 +94,7 @@ type Service struct {
 	deliveryMu               sync.Mutex
 	deliveryProgress         *deliveryProgressRegistry
 	deliveryProgressOnce     sync.Once
+	referenceProgress        sync.Map
 	deliveryControlMu        sync.Mutex
 	deliveryCancels          map[string]context.CancelFunc
 	deliveryDeadlines        map[string]time.Time
@@ -93,6 +103,10 @@ type Service struct {
 	tasksOnce                sync.Once
 	workspaceOps             *operations.Registry
 	workspaceOpsMu           sync.Mutex
+	imageRecoveryActive      atomic.Bool
+	imageRecoveryAfterID     string
+	videoRecoveryActive      atomic.Bool
+	videoRecoveryAfterID     string
 	bindAfterID              string
 	bindCursorMu             sync.Mutex
 }
@@ -154,7 +168,7 @@ func newService(repo *repository.Repository, dataDir string, options serviceOpti
 	if repo == nil {
 		pluginRuntimeErr = fmt.Errorf("插件状态存储未初始化")
 	} else {
-		pluginRuntime, pluginRuntimeErr = newPluginRuntimeWithStore(dataDir, plugins.NewRepositoryStore(repo))
+		pluginRuntime, pluginRuntimeErr = newPluginRuntimeWithReferences(dataDir, plugins.NewRepositoryStore(repo), newPluginReferences(dataDir, repo))
 	}
 	service := &Service{repo: repo, dataDir: dataDir, mode: options.mode, activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator, localResourceStorage: localResourceStorage, pluginRuntime: pluginRuntime, pluginRuntimeErr: pluginRuntimeErr, workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute}
 	service.taskTerminalCoordinator = newTaskTerminalCoordinator(service)
@@ -266,6 +280,19 @@ func (s *Service) refreshTaskProviderState(task *model.Task) error {
 	if latest.ProviderRequestID != "" {
 		task.ProviderRequestID = latest.ProviderRequestID
 	}
+	if latest.ImageJobID != "" {
+		task.ImageJobID = latest.ImageJobID
+	}
+	if latest.BeefUsageState != nil {
+		task.BeefUsageState = latest.BeefUsageState
+	}
+	if latest.BeefBillingState != nil {
+		task.BeefBillingState = latest.BeefBillingState
+	}
+	if latest.BeefReconcileDeadline != nil {
+		task.BeefReconcileDeadline = latest.BeefReconcileDeadline
+	}
+	task.Stage, task.Progress = latest.Stage, latest.Progress
 	task.PollStage = latest.PollStage
 	task.NextPollAt = latest.NextPollAt
 	task.ProviderCancelStatus = latest.ProviderCancelStatus
@@ -386,6 +413,13 @@ func (s *Service) cancelActiveTask(id string) {
 	if cancel != nil {
 		cancel()
 	}
+	s.deliveryControlMu.Lock()
+	for identity, stop := range s.deliveryCancels {
+		if strings.HasPrefix(identity, id+":") {
+			stop()
+		}
+	}
+	s.deliveryControlMu.Unlock()
 }
 
 func nodeOp(id string, nodeType string, title string, x int, y int, workflowKind string, content string) map[string]any {
@@ -428,4 +462,8 @@ func defaultString(value string, fallback string) string {
 
 func newID() string {
 	return kernel.NewID()
+}
+
+func (s *Service) RecoverTask(ctx context.Context, userID, id string) (*model.Task, error) {
+	return s.taskDomain().RecoverTask(ctx, userID, id)
 }
