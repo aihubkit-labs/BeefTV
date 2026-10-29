@@ -23,6 +23,7 @@ Seedance 专用调度与声明式视频插件共用该下载合同，包括直�
 
 - OpenAI Videos / Sora 使用 `POST /v1/videos` 和 multipart，最多一张参考图。不支持的多图、参考视频、参考音频、尾帧及蒙版会在提交前报错。
 - 「视频生成 JSON · ratio / duration」使用 `POST /v1/video/generations` 和 JSON，发送 `images` 对象数组及图片角色、整数 `duration`、`ratio`，并从查询结果 `data[].url` 取回视频。只有服务商文档符合该格式时才选择。
+- 「AIHubKit Video」对应 [AIHubKit 视频接口文档](https://86bdknokqu.apifox.cn/9260936m0)：使用 `POST /v1/videos` 和 JSON，发送整数 `duration`、`ratio`、带 `p` 后缀的 `resolution`，以及 `referenceImages/referenceVideos/referenceAudios` HTTPS URL 数组。安装并启用 `aihubkit-video` 插件后，在模型设置中选择该协议。使用本地参考素材时需配置公网对象存储，或提供可访问的 HTTPS 链接；当前文档未明确首尾帧字段，插件会在提交前拒绝显式首尾帧。状态通过 `GET /v1/videos/:id` 查询，完成后使用返回的 `url` 或同一任务的 `/content` 端点取回视频。
 - 既有 NewAPI Video Generations 使用 `seconds/aspect_ratio/image_urls`，与上一项的字段不同；方舟原生、fal 和其他专用协议也须按各自文档选择。
 
 在「设置 → 模型服务 → 管理服务 → 高级模型设置与测试 → 配置使用」选择协议，并按服务商文档设置素材与参数限制。生成测试会收费；保存配置和选择协议本身不会提交生成。HTTP 错误或超时后不会自动改用其他协议重发。
