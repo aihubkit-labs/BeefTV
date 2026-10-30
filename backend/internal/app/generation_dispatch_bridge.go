@@ -793,7 +793,7 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 }
 
 func prepareBeefAPISeedanceReferences(ctx context.Context, config providerConfig, input *canvasGenerationInput, read beefAPISeedanceMediaReader) error {
-	return generation.PrepareBeefAPISeedanceReferences(ctx, config, input, read)
+	return generation.PrepareBeefAPIVideoReferences(ctx, config, input, read)
 }
 
 func beefAPISeedanceMediaGroups(input *canvasGenerationInput) []beefAPISeedanceMediaGroup {
@@ -806,10 +806,6 @@ func skipBeefAPISeedanceMedia(media providerMedia) bool {
 
 func readBeefAPISeedanceInlineMedia(kind string, media providerMedia) ([]byte, string, bool, error) {
 	return generation.ReadBeefAPISeedanceInlineMedia(kind, media)
-}
-
-func fallbackBeefAPISeedanceInline(ctx context.Context, input *canvasGenerationInput, read beefAPISeedanceMediaReader) error {
-	return generation.FallbackBeefAPISeedanceInline(ctx, input, read)
 }
 
 func createBeefAPISeedanceUpload(ctx context.Context, config providerConfig, request beefAPISeedanceUploadRequest) (beefAPISeedanceUploadSession, error) {

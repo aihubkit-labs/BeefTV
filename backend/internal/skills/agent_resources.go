@@ -51,6 +51,20 @@ type AgentFile struct {
 
 var agentSkillIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
 
+// Requirements belong to the selected immutable version, not the current
+// package or a model-supplied declaration.
+func (s *Service) AgentRequirements(userID string, pin Pin) ([]string, error) {
+	_, version, _, err := s.agentPackage(userID, pin)
+	if err != nil {
+		return nil, err
+	}
+	release, err := marketReleaseMetadata(version.MarketReleaseJSON)
+	if err != nil || release == nil {
+		return nil, err
+	}
+	return release.Requirements, nil
+}
+
 func ValidatePin(pin Pin) error {
 	if !agentSkillIDPattern.MatchString(pin.SkillID) || !agentSkillIDPattern.MatchString(pin.VersionID) || len(pin.ContentHash) != 64 {
 		return kernel.BadAuthRequest("技能选择必须包含技能、版本和内容摘要")
@@ -81,7 +95,7 @@ func (s *Service) agentPackage(userID string, pin Pin) (*model.Skill, *model.Ski
 	}
 	version, err := s.repo.SkillVersion(pin.VersionID)
 	if err != nil || version.SkillID != pin.SkillID {
-		return nil, nil, nil, kernel.BadAuthRequest("所选技能版本不存在")
+		return nil, nil, nil, kernel.WrapAppError(400, "所选技能版本不存在", err)
 	}
 	if version.ContentHash != pin.ContentHash {
 		return nil, nil, nil, kernel.NewAppError(409, "技能版本内容已变化，请重新选择")
@@ -139,7 +153,7 @@ func (s *Service) AgentFile(userID string, pin Pin, filePath string) (*AgentFile
 		}
 		data, err := s.readSkillArchiveEntry(version, normalized)
 		if err != nil {
-			return nil, kernel.BadAuthRequest("所选技能版本文件不可读取，请重新安装或选择可用版本")
+			return nil, kernel.WrapAppError(400, "所选技能版本文件不可读取，请重新安装或选择可用版本", err)
 		}
 		sum := sha256.Sum256(data)
 		if len(data) > 256<<10 || !utf8.Valid(data) || int64(len(data)) != file.Size || hex.EncodeToString(sum[:]) != file.SHA256 {

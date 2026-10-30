@@ -1,4 +1,4 @@
-import { defaultImageCapabilityConfig, modelCapabilityConfigFor, normalizeImageValue, normalizeVideoValue, STANDARD_IMAGE_SIZE_VALUES, videoDurationAllowed, type ImageCapabilityConfig } from "@/lib/model-capabilities";
+import { defaultImageCapabilityConfig, modelCapabilityConfigFor, normalizeImageValue, normalizeVideoValue, STANDARD_IMAGE_SIZE_VALUES, VIDEO_CAPABILITIES_UNAVAILABLE, videoDurationAllowed, videoReferencesForOperation, type ImageCapabilityConfig } from "@/lib/model-capabilities";
 import { normalizeVideoBoolean, normalizeVideoResolutionValue, videoResolutionComparisonKey } from "@/lib/video-generation-options";
 import { imageSizePresets } from "@/lib/image-size-presets";
 import { sanitizeVideoPriceQuote, seedancePortraitLabel, seedancePortraitModel } from "@/lib/seedance-portrait";
@@ -84,7 +84,7 @@ export function modelCompatibilityError(config: AiConfig, model: string, require
         const publicOptionNames = logicalCost?.logicalCapabilitySpec?.options || {};
         const logicalRequirements = {
             ...requirements,
-            options: Object.fromEntries(Object.entries(requirements.options || {}).filter(([name]) => Boolean(publicOptionNames[name]))),
+            options: Object.fromEntries(Object.entries(requirements.options || {}).filter(([name]) => Boolean(publicOptionNames[name])).map(([name, value]) => [name, capability === "image" && name === "count" ? modelCapabilityConfigFor(config, model).image?.fixedOutputs || value : value])),
         };
         const errors = logicalSpecs.map((spec) => logicalModelCompatibilityError(spec, logicalRequirements, visualInputCount));
         return errors.some((error) => !error) ? "" : errors[0] || "当前输入不受支持";
@@ -102,13 +102,16 @@ export function modelCompatibilityError(config: AiConfig, model: string, require
     }
 
     if (capability === "video") {
-        const profile = modelCapabilityConfigFor(config, model).video!;
+        const capabilityConfig = modelCapabilityConfigFor(config, model);
+        if (capabilityConfig.videoCapabilitiesUnavailable) return VIDEO_CAPABILITIES_UNAVAILABLE;
+        const profile = capabilityConfig.video!;
         if (requirements.videoSeconds && !videoDurationAllowed(profile, Number(requirements.videoSeconds))) return "不支持当前视频时长";
         if (!input) return "";
-        if (visualInputCount > profile.references.maxImages) return `最多支持 ${profile.references.maxImages} 张参考图`;
-        if (input.videoCount > profile.references.maxVideos) return `最多支持 ${profile.references.maxVideos} 个参考视频`;
-        if (input.audioCount > profile.references.maxAudios) return `最多支持 ${profile.references.maxAudios} 个参考音频`;
         const operation = resolveVideoOperation(input, requirements.videoOperation);
+        const refs = videoReferencesForOperation(profile, requirements.videoOperation || "");
+        if (visualInputCount > refs.maxImages) return `最多支持 ${refs.maxImages} 张参考图`;
+        if (input.videoCount > refs.maxVideos) return `最多支持 ${refs.maxVideos} 个参考视频`;
+        if (input.audioCount > refs.maxAudios) return `最多支持 ${refs.maxAudios} 个参考音频`;
         if (operation !== "concat" && !profile.operations.includes(operation)) return `不支持${videoOperationLabel(operation)}`;
         return "";
     }
@@ -129,11 +132,12 @@ export function modelPromptLengthError(config: AiConfig, model: string, capabili
     if (!configuredProfile) return "";
     const profile = modelCapabilityConfigFor(config, model);
     const maxChars = capability === "text" ? profile.text?.references.promptMaxChars : capability === "image" ? profile.image?.references.promptMaxChars : capability === "video" ? profile.video?.references.promptMaxChars : undefined;
-    if (!maxChars || maxChars <= 0) return "";
     const actualChars = Array.from(prompt).length;
-    if (actualChars <= maxChars) return "";
     const label = capability === "text" ? "文本" : capability === "image" ? "图片" : "视频";
-    return `当前${label}模型提示词最多 ${maxChars} 个字符，完整提示词为 ${actualChars} 个字符。系统不会自动截断，请精简当前输入、连线内容或技能上下文后重试`;
+    if (maxChars && maxChars > 0 && actualChars > maxChars) return `当前${label}模型提示词最多 ${maxChars} 个字符，完整提示词为 ${actualChars} 个字符。系统不会自动截断，请精简当前输入、连线内容或技能上下文后重试`;
+    const maxUnits = capability === "video" ? profile.video?.references.promptMaxUtf16Units : 0;
+    if (maxUnits && maxUnits > 0 && prompt.length > maxUnits) return `当前视频模型提示词最多 ${maxUnits} 个长度单位，完整提示词为 ${prompt.length} 个单位（此通道按 UTF-16 计数，常见表情占 2 个单位）。系统不会自动截断，请精简后重试`;
+    return "";
 }
 
 export function modelRequestOptions(config: AiConfig, capability: ModelCapability) {
@@ -289,6 +293,7 @@ export function resolveModelGenerationDefaults(
     const hasModelCapabilityProfile = Boolean(profile?.capabilityConfig);
     const source = (key: keyof ModelGenerationDefaults) => explicit[key] ?? (isManagedModel || hasModelCapabilityProfile ? undefined : fallback[key]);
     const capabilityProfile = modelCapabilityConfigFor(config, model);
+    if (capability === "video" && capabilityProfile.videoCapabilitiesUnavailable) return { ...fallback, ...explicit };
 
     if (capability === "image" && capabilityProfile.image) {
         const normalized = normalizeImageValue(capabilityProfile.image, {
@@ -340,6 +345,7 @@ export function maxModelInputCapacity(config: AiConfig, capability: "image" | "v
 
 export function modelGroupReferenceLimits(config: AiConfig, selected: string, capability: ModelCapability, requirements?: ModelRequirements): ModelReferenceLimits | undefined {
     if (capability !== "image" && capability !== "video") return undefined;
+    if (capability === "video" && modelCapabilityConfigFor(config, selected).videoCapabilitiesUnavailable) return undefined;
     const options = selectableModelsByCapability(config, capability);
     const selectedGroup = groupModelsByDisplayName(config, options).find((group) => group.models.includes(selected));
     const groupModels = selectedGroup?.models || (selected ? [selected] : []);

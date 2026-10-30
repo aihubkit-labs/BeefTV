@@ -16,28 +16,29 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/modelcatalog"
-	"infinite-canvas/backend/internal/providerpreset"
 )
 
+// usesSeedreamRequestBody 判断这次出图是否走 Seedream 专用请求体。Seedream 型号自带
+// 请求体，能保留图层拆分、图片格式、水印和提示词优化设置，改走通用插件会静默丢掉它们。
+// 例外是 Agent Plan 图片协议：它走 /api/plan/v3/images/generations，只有声明式插件知道
+// 那个端点，按型号名套用官方 Ark 路径会把请求发错地址。
+func usesSeedreamRequestBody(input Input) bool {
+	if seedreamFamily(input.Config.Model) == "" {
+		return false
+	}
+	return model.ChannelInterfaceType(input.Config.InterfaceType) != model.ChannelInterfaceVolcengineArkAgentPlanImage
+}
+
 func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {
+	if managedConnection(input.Config) {
+		return runManagedImageTask(ctx, input)
+	}
+	if usesSeedreamRequestBody(input) {
+		return runSeedreamImageTask(ctx, input)
+	}
 	outputCount := 1
 	if input.ImageCapability != nil && input.ImageCapability.FixedOutputs > 0 {
 		outputCount = input.ImageCapability.FixedOutputs
-	}
-	if providerpreset.IsBeefAPIEndpoint(input.Config.BaseURL) {
-		if contract, ok := providerpreset.BeefAPIImageContract(input.Config.Model); ok {
-			if contract.FixedOutputs == 0 {
-				return runBeefAPIImageTask(ctx, input, contract)
-			}
-			if input.Config.TransparentBackground == "true" || len(input.ReferenceVideos)+len(input.ReferenceAudios) > 0 {
-				return nil, errors.New("当前图片模型不支持透明背景或参考音视频")
-			}
-			if err := modelcatalog.ValidateImageTask(nil, taskInputFromCanvas(input)); err != nil {
-				return nil, err
-			}
-			outputCount = contract.FixedOutputs
-		}
 	}
 	if _, ok := DeclarativeProtocolAdapterForContext(ctx, input.Config.InterfaceType); ok {
 		return RunDeclarativeProtocolTask(ctx, input)
@@ -71,7 +72,7 @@ func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, err
 		writeField(writer, "prompt", WithSystemPrompt(input.Config, input.Prompt))
 		writeField(writer, "n", strconv.Itoa(outputCount))
 		if ImageParameterSupported(input.ImageCapability, "response_format") {
-			writeField(writer, "response_format", "b64_json")
+			writeField(writer, "response_format", ImageResponseFormatValue(input.ImageCapability))
 		}
 		if ImageParameterSupported(input.ImageCapability, "output_format") {
 			writeField(writer, "output_format", "png")
@@ -108,7 +109,7 @@ func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, err
 			"n":      outputCount,
 		}
 		if ImageParameterSupported(input.ImageCapability, "response_format") {
-			body["response_format"] = "b64_json"
+			body["response_format"] = ImageResponseFormatValue(input.ImageCapability)
 		}
 		if ImageParameterSupported(input.ImageCapability, "output_format") {
 			body["output_format"] = "png"
@@ -130,7 +131,11 @@ func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, err
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"mode": "image", "images": images}, nil
+	result := map[string]interface{}{"mode": "image", "images": images}
+	if payload.Usage != nil {
+		result["usage"] = payload.Usage
+	}
+	return result, nil
 }
 
 func RunGeminiImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {

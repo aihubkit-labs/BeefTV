@@ -6,6 +6,11 @@ import { validateVideoDirectDeliveryRelease } from './video-direct-delivery-rele
 import { validateTeamRelease } from './team-release-contract.mjs';
 import { validateImagePreparationRelease } from './image-preparation-release-contract.mjs';
 import { validateMusic3Release } from './music3-release-contract.mjs';
+import { validateV201Release } from './v201-release-contract.mjs';
+import { validateV202Release } from './v202-release-contract.mjs';
+import { validateV203Release } from './v203-release-contract.mjs';
+import { validateV204Release } from './v204-release-contract.mjs';
+import { validateV205Release } from './v205-release-contract.mjs';
 import {
   REQUIRED_AGENT_CHECK_IDS,
   DETERMINISTIC_FAULT_CHECK_IDS,
@@ -17,6 +22,8 @@ import {
   releaseAgentChecks,
   releaseDeterministicChecks,
   validateDeferredV1713,
+  validateTargetedV200,
+  targetedV200SourceProof,
 } from './real-generation-release-contract.mjs';
 
 // Tree identities survive squash/merge commits, but change whenever shipped
@@ -33,6 +40,75 @@ const receipt = JSON.parse(readFileSync(`docs/release-evidence/${version}.json`,
 const fail = message => { throw new Error(`Real generation release gate: ${message}`); };
 const nonempty = value => typeof value === 'string' && value.trim() !== '';
 if (receipt.version !== version || receipt.sourceDigest !== sourceDigest) fail('receipt does not match this release source');
+if (version === 'v2.0.5') {
+  const reviewedTree = execFileSync('git', ['ls-tree', '-r', receipt.review?.reviewedHead, '--', ...sourcePaths], { encoding: 'utf8' });
+  execFileSync('git', ['merge-base', '--is-ancestor', 'c99cba49b6518673b078991cf9d995ba14be2921', 'HEAD']);
+  validateV205Release(receipt, sourceDigest, {
+    authorizationBytes: readFileSync('docs/release-evidence/v2.0.5-owner-authorization.json'),
+    priorReceiptBytes: readFileSync('docs/release-evidence/v2.0.4.json'),
+    reviewedSourceDigest: createHash('sha256').update(reviewedTree).digest('hex'),
+  });
+  console.log('v2.0.5 targeted release: complete paid matrix and assistant suite not rerun by owner waiver. Current-source independent review, free image recovery UI and all four final-package checks remain mandatory.');
+  process.exit(0);
+}
+if (version === 'v2.0.4') {
+  // The owner assigned this version's review to the primary agent, so the
+  // reviewed source is the frozen candidate tree itself unless a commit is named.
+  const reviewedTree = receipt.review?.reviewedHead
+    ? execFileSync('git', ['ls-tree', '-r', receipt.review.reviewedHead, '--', ...sourcePaths], { encoding: 'utf8' })
+    : sourceTree;
+  execFileSync('git', ['merge-base', '--is-ancestor', '363248539ed7b59a9283e9726b3a650b916adb42', 'HEAD']);
+  validateV204Release(receipt, sourceDigest, {
+    authorizationBytes: readFileSync('docs/release-evidence/v2.0.4-owner-authorization.json'),
+    priorReceiptBytes: readFileSync('docs/release-evidence/v2.0.3.json'),
+    reviewedSourceDigest: createHash('sha256').update(reviewedTree).digest('hex'),
+  });
+  console.log('v2.0.4 targeted release: complete paid matrix waived by the owner; primary-agent review covers the frozen source. Four-platform package checks remain mandatory.');
+  process.exit(0);
+}
+if (version === 'v2.0.3') {
+  const reviewedTree = execFileSync('git', ['ls-tree', '-r', receipt.review?.reviewedHead, '--', ...sourcePaths], { encoding: 'utf8' });
+  execFileSync('git', ['merge-base', '--is-ancestor', '95ee1445bb09c42b06121ebf79e8efc467af9f77', 'HEAD']);
+  validateV203Release(receipt, sourceDigest, {
+    authorizationBytes: readFileSync('docs/release-evidence/v2.0.3-owner-authorization.json'),
+    priorReceiptBytes: readFileSync('docs/release-evidence/v2.0.2.json'),
+    reviewedSourceDigest: createHash('sha256').update(reviewedTree).digest('hex'),
+  });
+  console.log('v2.0.3 targeted release: complete paid matrix waived; complete assistant suite not rerun or claimed passed. Four-platform package checks remain mandatory.');
+  process.exit(0);
+}
+if (version === 'v2.0.2') {
+  const reviewedTree = execFileSync('git', ['ls-tree', '-r', receipt.review?.reviewedHead, '--', ...sourcePaths], { encoding: 'utf8' });
+  execFileSync('git', ['merge-base', '--is-ancestor', 'd33ff1b7553cb938dc9e8f777c04a7e396a45d11', 'HEAD']);
+  validateV202Release(receipt, sourceDigest, {
+    authorizationBytes: readFileSync('docs/release-evidence/v2.0.2-owner-authorization.json'),
+    priorReceiptBytes: readFileSync('docs/release-evidence/v2.0.1.json'),
+    reviewedSourceDigest: createHash('sha256').update(reviewedTree).digest('hex'),
+  });
+  console.log('v2.0.2 targeted release: complete media/assistant acceptance NOT run by owner waiver; no new paid generation; four-platform package safety checks remain mandatory.');
+  process.exit(0);
+}
+if (version === 'v2.0.1') {
+  const reviewedTree = execFileSync('git', ['ls-tree', '-r', receipt.review?.reviewedHead, '--', ...sourcePaths], { encoding: 'utf8' });
+  execFileSync('git', ['merge-base', '--is-ancestor', 'd870963556d9a057449cc4db91e0a08e8fc1851f', 'HEAD']);
+  validateV201Release(receipt, sourceDigest, {
+    authorizationBytes: readFileSync('docs/release-evidence/v2.0.1-owner-authorization.json'),
+    priorReceiptBytes: readFileSync('docs/release-evidence/v2.0.0.json'),
+    reviewedSourceDigest: createHash('sha256').update(reviewedTree).digest('hex'),
+  });
+  console.log('v2.0.1 publication authorized before testing: 12 media cases and 23 assistant checks PENDING after release; no new paid budget. Four-platform final-package safety gates remain mandatory.');
+  process.exit(0);
+}
+if (['v2.0.0-wand-audio-targeted-retest-20261021', 'v2.0.0-owner-release-with-postchecks-20261021'].includes(receipt.ownerException?.scope)) {
+  const originalBytes = readFileSync('docs/release-evidence/v2.0.0-original-execution.json');
+  const deferred = receipt.ownerException.scope === 'v2.0.0-owner-release-with-postchecks-20261021';
+  const postchecksBytes = deferred ? readFileSync('docs/release-evidence/v2.0.0-owner-postchecks-snapshot.json') : undefined;
+  const result = validateTargetedV200(receipt, sourceDigest, { originalBytes, sourceProof: targetedV200SourceProof(sourceTree), postchecksBytes });
+  console.log(deferred
+    ? `v2.0.0 owner release with postchecks: 12 original media cases; 16 historical checks passed, 7 remain failed/pending. Acceptance NOT complete. Cash CNY ${receipt.spentCNY}, unresolved full holds CNY ${receipt.pendingCNY}, cap 50; final packages ${receipt.packages.status}.`
+    : `v2.0.0 targeted acceptance: ${result.retainedCases} media cases and ${result.retainedChecks} checks retain their original execution source; ${result.currentChecks} checks verified on current source. CNY ${receipt.spentCNY}/50; final packages ${receipt.packages.status}.`);
+  process.exit(0);
+}
 if (version === 'v1.7.27') {
   const treeDigest = (ref, paths) => createHash('sha256').update(execFileSync('git', ['ls-tree', '-r', ref, '--', ...paths], { encoding: 'utf8' })).digest('hex');
   validateMusic3Release(receipt, sourceDigest, {

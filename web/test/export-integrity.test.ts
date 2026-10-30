@@ -2,12 +2,16 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { unzipSync } from "fflate";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import type { Asset } from "@/stores/use-asset-store";
+import { getClientDiagnosticSnapshot, recordDiagnosticEvent, setDiagnosticUserScope } from "@/services/diagnostics/client-diagnostics";
+import { installLocalForageStoreFactoryForTests } from "@/lib/localforage-storage";
 
 const blobs = new Map<string, Blob>();
 const unreadable = new Set<string>();
+const blockedReads = new Map<string, Promise<Blob | undefined>>();
 const restored = new Map<string, Blob>();
 const drawings = new Map<string, { version: 1; drawingId: string; snapshot: object; revision: number; updatedAt: string; shapeCount: number; pageCount: number }>();
 const getBlob = async (key: string) => {
+    if (blockedReads.has(key)) return blockedReads.get(key);
     if (unreadable.has(key)) throw new Error("fixture disk read error");
     return blobs.get(key);
 };
@@ -29,12 +33,22 @@ const { reportOwnedMediaSave } = await import("@/services/desktop-media-save");
 const { http } = await import("@/services/api/request");
 const originalWindow = globalThis.window;
 const saved: { name: string; data: string }[] = [];
+const diagnosticRecords = new Map<string, unknown>();
 let acceptSave = true;
 
 beforeEach(() => {
+    // This shell fixture has a window but no IndexedDB. Preserve diagnostic
+    // writes with an async memory store; swallowing ready()'s missing-driver
+    // error would leave localforage repeatedly waiting for an installed method.
+    installLocalForageStoreFactoryForTests(storeName => ({
+        ready: async () => {},
+        getItem: async (key: string) => diagnosticRecords.get(`${storeName}:${key}`) ?? null,
+        setItem: async (key: string, value: unknown) => { diagnosticRecords.set(`${storeName}:${key}`, value); return value; },
+    }) as LocalForage);
     blobs.clear();
     restored.clear();
     unreadable.clear();
+    blockedReads.clear();
     drawings.clear();
     saved.length = 0;
     acceptSave = true;
@@ -48,7 +62,13 @@ beforeEach(() => {
         },
     });
 });
-afterEach(() => { globalThis.window = originalWindow; });
+afterEach(async () => {
+    try { await getClientDiagnosticSnapshot(); }
+    finally {
+        globalThis.window = originalWindow;
+        installLocalForageStoreFactoryForTests();
+    }
+});
 
 function project(keys: string[]): CanvasProject {
     return {
@@ -58,6 +78,36 @@ function project(keys: string[]): CanvasProject {
         })), edges: [],
     } as unknown as CanvasProject;
 }
+
+test("a stalled media read reports progress and cancellation prevents any later archive save", async () => {
+    let finishRead!: (blob: Blob) => void;
+    blockedReads.set("video:blocked", new Promise<Blob>((resolve) => { finishRead = resolve; }));
+    const controller = new AbortController();
+    const phases: string[] = [];
+    const exporting = exportCanvasProjects([project(["video:blocked"])], "取消测试", { signal: controller.signal, onProgress: (progress) => phases.push(progress.phase) });
+    expect(phases).toEqual(["media"]);
+    controller.abort();
+    await expect(exporting).rejects.toHaveProperty("name", "AbortError");
+    finishRead(new Blob(["late video"]));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(saved).toEqual([]);
+    expect(phases).toEqual(["media"]);
+});
+
+test("per-file export progress cannot evict a real bind failure", async () => {
+    setDiagnosticUserScope("export-retention");
+    recordDiagnosticEvent({ category: "task", level: "error", code: "retained-bind-failure", message: "绑定失败" });
+    const keys = Array.from({ length: 600 }, (_, index) => `video:retention-${index}`);
+    for (const key of keys) blobs.set(key, new Blob(["x"]));
+    await exportCanvasProjects([project(keys)]);
+    const { events, coverage } = await getClientDiagnosticSnapshot();
+    expect(coverage.persisted).toBe(true);
+    expect(coverage.writeErrorCount).toBe(0);
+    expect([...diagnosticRecords.values()].some(value => String(value).includes("retained-bind-failure"))).toBe(true);
+    expect(events.some(event => event.code === "retained-bind-failure")).toBe(true);
+    expect(events.filter(event => event.code?.startsWith("canvas_export_")).length).toBeLessThanOrEqual(4);
+});
 
 function mediaAsset(key?: string): Asset {
     return {

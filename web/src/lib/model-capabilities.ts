@@ -1,13 +1,19 @@
-import { isVolcengineArkVideoProtocol, type ModelProtocol, type ModelProtocolWorkflow } from "@/lib/model-protocols";
+import { isVolcengineArkVideoProtocol, modelProtocolCapability, type ModelProtocol, type ModelProtocolWorkflow } from "@/lib/model-protocols";
 import { beefAPIImageContract } from "@/lib/beefapi-image-contracts";
+import { seedreamFamily, seedreamImageCapability } from "@/lib/seedream-image";
 import type { ImageResolutionOption, ImageResolutionTier } from "@/lib/image-resolution-tiers";
+import { videoPromptLimits } from "@/lib/video-prompt-limits";
 
 export type ModelCapabilityConfig = {
     version: number;
     text?: TextCapabilityConfig;
     image?: ImageCapabilityConfig;
     video?: VideoCapabilityConfig;
+    /** Local display state; never a supplier capability or request option. */
+    videoCapabilitiesUnavailable?: boolean;
 };
+
+export const VIDEO_CAPABILITIES_UNAVAILABLE = "当前视频模型能力尚未加载，请在设置中刷新模型列表";
 
 export type TextCapabilityConfig = {
     /** Whether the upstream text endpoint accepts SSE streaming responses. */
@@ -25,14 +31,16 @@ export type TextCapabilityConfig = {
 
 export type ImageSizeParameter = "none" | "size" | "aspect_ratio";
 
+export type ImageResponseFormat = "b64_json" | "url";
+
 /**
- * 普通视频模型提示词字符数的默认上限。
- *
- * 视频提示词由「输入框文本 + 连线内容 + 技能上下文」合成，远长于用户手输内容，
- * 因此不能沿用偏小的默认值把画布工作流拦在本地。必须与后端
- * `DefaultVideoPromptMaxChars` 保持一致，否则前端放行后端拒绝（或反之）。
+ * 图片接口 response_format 的开关与取值。
+ * value 留空时按 b64_json 处理，让没有选过的渠道保持原有行为。
  */
-export const DEFAULT_VIDEO_PROMPT_MAX_CHARS = 8000;
+export type ImageResponseFormatConfig = { supported: boolean; value?: ImageResponseFormat };
+
+/** 0 means no documented local character limit; the supplier still validates. */
+export const DEFAULT_VIDEO_PROMPT_MAX_CHARS = 0;
 
 export type ImageCapabilityConfig = {
     references: {
@@ -54,15 +62,18 @@ export type ImageCapabilityConfig = {
         default: string;
     };
     transparentBackground: { supported: boolean; default: boolean };
-    responseFormat: { supported: boolean };
+    responseFormat: ImageResponseFormatConfig;
     outputFormat: { supported: boolean };
     maxOutputs: number;
     fixedOutputs?: number;
+    /** Total outputs orchestrated across native fixed-size requests. */
+    generationOutputs?: number[];
 };
 
 export type VideoCapabilityConfig = {
     references: {
         promptMaxChars: number;
+        promptMaxUtf16Units?: number;
         minImages: number;
         maxImages: number;
         maxImageBytes: number;
@@ -94,8 +105,8 @@ export type VideoCapabilityConfig = {
         maxAudioTotalDurationSeconds?: number;
     };
     duration: {
-		continuous?: boolean;
-		fractionalMin?: number;
+        continuous?: boolean;
+        fractionalMin?: number;
         selection: "range" | "enum";
         min?: number;
         max?: number;
@@ -104,6 +115,7 @@ export type VideoCapabilityConfig = {
         default: number;
     };
     durationSupported?: boolean;
+    taskTypeConstraints?: boolean;
     ratios: string[];
     defaultRatio: string;
     resolutions: string[];
@@ -112,6 +124,7 @@ export type VideoCapabilityConfig = {
     watermark: { supported: boolean; default: boolean };
     operations: string[];
     defaultOperation: string;
+    operationReferences?: Record<string, Partial<Pick<VideoCapabilityConfig["references"], "minImages" | "maxImages" | "maxVideos" | "maxAudios">>>;
 };
 
 // 旧版本的“允许自定义”可能只保存了 `*`，前台需要用这组标准值恢复可选项。
@@ -163,7 +176,8 @@ export function normalizeModelCapabilityConfig(config: ModelCapabilityConfig): M
 }
 
 const catalogIntBounds: Record<string, [number, number]> = {
-    promptMaxChars: [1, 1_000_000],
+    promptMaxChars: [0, 1_000_000],
+    promptMaxUtf16Units: [0, 1_000_000],
     minImages: [0, 100],
     maxImages: [0, 100],
     maxVideos: [0, 100],
@@ -327,11 +341,50 @@ export function sanitizeServerVideoCapability(value: unknown): VideoCapabilityCo
         operations,
         defaultOperation,
     };
+    if ("operationReferences" in object) {
+        const byOperation = catalogObject(object.operationReferences);
+        if (!byOperation) return null;
+        video.operationReferences = {};
+        for (const [operation, raw] of Object.entries(byOperation)) {
+            const limits = catalogObject(raw);
+            if (!limits || !operations.includes(operation)) return null;
+            const counts: NonNullable<VideoCapabilityConfig["operationReferences"]>[string] = {};
+            for (const key of ["minImages", "maxImages", "maxVideos", "maxAudios"] as const) {
+                if (!(key in limits)) continue;
+                const count = limits[key];
+                if (typeof count !== "number" || !Number.isInteger(count) || count < 0 || count > 100) return null;
+                counts[key] = count;
+            }
+            if ((counts.minImages ?? normalizedRefs.minImages ?? 0) > (counts.maxImages ?? normalizedRefs.maxImages ?? 0)) return null;
+            video.operationReferences[operation] = counts;
+        }
+    }
     if ("durationSupported" in object) {
         if (typeof object.durationSupported !== "boolean") return null;
         video.durationSupported = object.durationSupported;
     }
+    if ("taskTypeConstraints" in object) {
+        if (typeof object.taskTypeConstraints !== "boolean") return null;
+        video.taskTypeConstraints = object.taskTypeConstraints;
+    }
     return video;
+}
+
+export function videoSupportsTaskTypeConstraints(video?: VideoCapabilityConfig | null): boolean {
+    if (!video) return false;
+    if (typeof video.taskTypeConstraints === "boolean") return video.taskTypeConstraints;
+    return Boolean(video.operations?.includes("inpaint") || video.operations?.includes("extend"));
+}
+
+export function versionedVideoCapability(value: unknown, version: string | undefined): VideoCapabilityConfig | null {
+    if (!version?.trim()) return null;
+    const video = sanitizeServerVideoCapability(value);
+    if (!video || ![video.references.maxImages, video.references.maxVideos, video.references.maxAudios].every(Number.isInteger)) return null;
+    return video;
+}
+
+export function videoReferencesForOperation(profile: VideoCapabilityConfig, operation: string): VideoCapabilityConfig["references"] {
+    return { ...profile.references, ...profile.operationReferences?.[operation] };
 }
 
 // Keep explicit pixel presets for each resolution tier so the settings panel can
@@ -379,6 +432,8 @@ const defaultImageSizes = [
 ];
 
 export function upgradeGPTImageCapability(profile: ImageCapabilityConfig, protocol: ModelProtocol | undefined, model: string): ImageCapabilityConfig {
+    const seedream = seedreamImageCapability(model);
+    if (seedream) return seedream;
     if (protocol !== "openai-image" || !["gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"].includes(model.trim().toLowerCase())) return profile;
     if (!Array.isArray(profile.quality?.values) || !Array.isArray(profile.size?.values)) return profile;
     const defaults = defaultImageCapabilityConfig(protocol, model);
@@ -391,6 +446,8 @@ export function upgradeGPTImageCapability(profile: ImageCapabilityConfig, protoc
 }
 
 export function defaultImageCapabilityConfig(protocol?: ModelProtocol, model = ""): ImageCapabilityConfig {
+    const seedream = seedreamImageCapability(model);
+    if (seedream) return seedream;
     const image: ImageCapabilityConfig = {
         references: { promptMaxChars: 32000, maxImages: 16, maxImageBytes: 30 * 1024 * 1024, maskSupported: true },
         size: { parameter: "size", values: [...defaultImageSizes], default: "1:1", allowCustom: true },
@@ -408,12 +465,13 @@ export function defaultImageCapabilityConfig(protocol?: ModelProtocol, model = "
     }
     const contract = protocol === "openai-image" ? beefAPIImageContract(model) : undefined;
     if (contract) {
+        const presets = "presets" in contract ? contract.presets as ImageResolutionOption[] : undefined;
         return {
             references: { promptMaxChars: contract.promptMaxChars, maxImages: contract.maxImages, maxImageBytes: contract.maxImageBytes, maskSupported: false },
-            size: { parameter: "size", values: [...Object.keys(contract.sizes), ...(contract.fixedOutputs ? Object.values(contract.sizes) : [])], default: "1:1", allowCustom: contract.minSide !== contract.maxSide },
+            size: { parameter: "size", values: [...new Set([...Object.keys(contract.sizes), ...(contract.fixedOutputs ? Object.values(contract.sizes) : []), ...(presets?.flatMap((preset) => [preset.ratio, preset.size]) || [])])], default: "1:1", allowCustom: contract.minSide !== contract.maxSide, ...(presets ? { presets } : {}) },
             quality: { supported: false, values: [], default: "auto" },
             transparentBackground: { supported: false, default: false },
-            responseFormat: { supported: Boolean(contract.fixedOutputs) }, outputFormat: { supported: false }, maxOutputs: contract.fixedOutputs || 1, fixedOutputs: contract.fixedOutputs,
+            responseFormat: { supported: Boolean(contract.fixedOutputs) }, outputFormat: { supported: false }, maxOutputs: contract.fixedOutputs || 1, fixedOutputs: contract.fixedOutputs, generationOutputs: "generationOutputs" in contract ? contract.generationOutputs as number[] : undefined,
         };
     }
     if (protocol === "grok-image") {
@@ -502,6 +560,24 @@ export function defaultImageCapabilityConfig(protocol?: ModelProtocol, model = "
         image.maxOutputs = 1;
     }
     return image;
+}
+
+/** 图片接口实际要发送的 response_format：未开启返回 null，没选过取值时按 b64_json。 */
+export function resolveImageResponseFormat(profile: ImageCapabilityConfig | undefined): ImageResponseFormat | null {
+    if (!profile?.responseFormat?.supported) return null;
+    return profile.responseFormat.value === "url" ? "url" : "b64_json";
+}
+
+/**
+ * 能力编辑器里是否允许选择 response_format 的取值。
+ * 只有走通用 OpenAI 兼容图片请求的渠道会按配置发出这个参数：
+ * 本体自营的 BeefAPI 图片契约固定接受内联 base64，grok / seedream / 火山等协议各自写死请求体，
+ * 给出选项却发不出去，等于又造一个「设置了不生效」。
+ */
+export function imageResponseFormatSelectable(protocol: ModelProtocol | undefined, model: string) {
+    if (protocol !== "openai-image" || beefAPIImageContract(model)) return false;
+    // Seedream 走专用请求体，单图分支写死 b64_json，选了 url 也发不出去。
+    return !seedreamFamily(model);
 }
 
 export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = ""): ModelCapabilityConfig {
@@ -637,7 +713,6 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
     if (isSeedance2Family(protocol, model)) {
         if (protocol === "newapi") video.generateAudio = { supported: true, default: true };
         video.references = overlayOfficialSeedance2References(video.references, isSeedance25Model(model));
-        if (protocol === "volcengine-ark-video" || protocol === "volcengine-ark-agent-plan-video") video.references.minAudioDurationSeconds = 2;
         video.operations = Array.from(new Set([...video.operations, "reference_to_video", ...(isSeedance25Model(model) ? ["audio_to_video" as const] : [])]));
         if (isSeedance25Model(model) && video.duration.selection === "range" && (video.duration.max || 0) < 30) {
             video.duration = { ...video.duration, max: 30 };
@@ -648,6 +723,7 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.ratios = [...video.ratios, "adaptive"];
         if (isSeedance25Model(model)) video.operations = [...video.operations, "inpaint", "extend"];
     }
+    Object.assign(video.references, videoPromptLimits(protocol, model));
     return { version: 1, text, image: defaultImageCapabilityConfig(protocol, model), video };
 }
 
@@ -668,9 +744,9 @@ export function pluginWorkflowCapabilityConfig(protocol: ModelProtocol, workflow
 }
 
 export function modelCapabilityConfigFor(
-    config: { channels: Array<{ id: string; models: string[]; baseUrl?: string; interfaceType?: ModelProtocol; modelProfiles?: Array<{ model: string; capabilityConfig?: ModelCapabilityConfig; protocol?: ModelProtocol }> }> },
+    config: { channels: Array<{ id: string; models: string[]; baseUrl?: string; credentialRef?: string; interfaceType?: ModelProtocol; modelProfiles?: Array<{ model: string; capability?: string; capabilityConfig?: ModelCapabilityConfig; protocol?: ModelProtocol; imageCapabilitiesVersion?: string; videoCapabilitiesVersion?: string }> }> },
     model: string,
-) {
+): ModelCapabilityConfig {
     const separator = model.indexOf("::");
     const channelId = separator >= 0 ? model.slice(0, separator) : "";
     const modelName = separator >= 0 ? model.slice(separator + 2) : model;
@@ -682,22 +758,46 @@ export function modelCapabilityConfigFor(
     // capability object while retaining the legacy entry as a fallback.
     const profile = channel?.modelProfiles?.find((item) => item.model === modelName && item.capabilityConfig && !Array.isArray(item.capabilityConfig)) || channel?.modelProfiles?.find((item) => item.model === modelName);
     const protocol = profile?.protocol || channel?.interfaceType;
+    if (profile?.imageCapabilitiesVersion && profile.capabilityConfig?.image) return structuredClone(profile.capabilityConfig);
+    const sourcedVideo = versionedVideoCapability(profile?.capabilityConfig?.video, profile?.videoCapabilitiesVersion);
+    if (sourcedVideo) return { ...defaultModelCapabilityConfig(), video: sourcedVideo };
+    if ((channel?.id === "beefapi" || channel?.credentialRef === "beefapi-enterprise") && (!profile || profile.capability === "video" || modelProtocolCapability(protocol) === "video")) {
+        // Keep callers renderable without claiming any controls are supported.
+        // Submission and settings surfaces display the unavailable state.
+        return { ...defaultModelCapabilityConfig(), videoCapabilitiesUnavailable: true, video: {
+            references: { promptMaxChars: 0, minImages: 0, maxImages: 0, maxImageBytes: 0, maxVideos: 0, maxVideoBytes: 0, maxVideoDurationSeconds: 0, maxAudios: 0, maxAudioBytes: 0, maxAudioDurationSeconds: 0 },
+            duration: { selection: "enum", values: [], default: 0 },
+            ratios: [], defaultRatio: "", resolutions: [], defaultResolution: "",
+            generateAudio: { supported: false, default: false }, watermark: { supported: false, default: false },
+            operations: [], defaultOperation: "text_to_video",
+        } };
+    }
     const fallback = defaultModelCapabilityConfig(protocol, modelName);
-    const alignMaterialPixels = (video: VideoCapabilityConfig | undefined) => {
+    // Official gateway contracts also upgrade capabilities cached by older installs.
+    try {
+        if (protocol === "openai-image" && beefAPIImageContract(modelName)?.fixedOutputs && ["beeftv.app", "beefapi.com", "enterprise.beefapi.com", "whatstoken.ai", "www.whatstoken.ai"].includes(new URL(channel?.baseUrl || "").hostname.toLowerCase())) return fallback;
+    } catch { /* Config without a public endpoint uses its stored capabilities. */ }
+    // 官方文档写的下限只收紧、不放宽，所以旧安装里存下来的 1 秒输出、1.8 秒音频也会被改到文档值；
+    // 管理员已经配得更严的数值保持不变。
+    const alignDocumentedRouteLimits = (video: VideoCapabilityConfig | undefined) => {
+        if (!video || !isSeedance2Family(protocol, modelName)) return;
         let host = "";
         try { host = new URL(channel?.baseUrl || "").hostname.toLowerCase(); } catch { /* no public URL */ }
-        const materialHost = ["beeftv.app", "enterprise.beefapi.com", "beefapi.com", "whatstoken.ai", "www.whatstoken.ai"].includes(host);
-        if (video && isSeedance2Family(protocol, modelName) && (isVolcengineArkVideoProtocol(protocol) || materialHost) && video.references.minVideoPixels === 409600 && video.references.maxVideoPixels === 8295044) video.references.minVideoPixels = 407696;
+        const materialHost = ["beeftv.app", "enterprise.beefapi.com", "beefapi.com", "whatstoken.ai", "www.whatstoken.ai"].includes(host) || channel?.id === "beefapi";
+        if ((isVolcengineArkVideoProtocol(protocol) || materialHost) && video.references.minVideoPixels === 409600 && video.references.maxVideoPixels === 8295044) video.references.minVideoPixels = 407696;
+        // 输出时长下限官方 4 秒：区间、连续（fractionalMin）和枚举三种配置都要收紧，枚举里的 -1（自动）保留。
+        video.duration = tightenDocumentedOutputDuration(video.duration);
+        if ((video.references.minAudioDurationSeconds || 0) < 2) video.references.minAudioDurationSeconds = 2;
     };
 
     if (!profile?.capabilityConfig) {
-        alignMaterialPixels(fallback.video);
+        alignDocumentedRouteLimits(fallback.video);
         return fallback;
     }
     const capabilityConfig = normalizeModelCapabilityConfig(profile.capabilityConfig);
     const text = capabilityConfig.text ? { ...fallback.text!, ...capabilityConfig.text, references: { ...fallback.text!.references, ...capabilityConfig.text.references } } : fallback.text;
-    const video = (capabilityConfig.video ? { ...fallback.video!, ...capabilityConfig.video, references: { ...fallback.video!.references, ...capabilityConfig.video.references } } : fallback.video)!;
-    alignMaterialPixels(video);
+    const video = (capabilityConfig.video ? { ...fallback.video!, ...capabilityConfig.video, references: { ...fallback.video!.references, ...capabilityConfig.video.references, promptMaxUtf16Units: capabilityConfig.video.references.promptMaxUtf16Units ?? 0 } } : fallback.video)!;
+    alignDocumentedRouteLimits(video);
     const configuredImage = capabilityConfig.image;
     const image = configuredImage
         ? (() => {
@@ -724,13 +824,42 @@ export function modelCapabilityConfigFor(
     return { ...fallback, ...capabilityConfig, text, image, video };
 }
 
-function isSeedance2Family(protocol: ModelProtocol | undefined, modelName: string) {
+export function sanitizeServerImageCapability(value: unknown): ImageCapabilityConfig | null {
+    if (!value || typeof value !== "object") return null;
+    const image = value as ImageCapabilityConfig;
+    if (!image.references || !image.size || !image.quality || !image.transparentBackground || !image.responseFormat || !image.outputFormat) return null;
+    if (![image.references.promptMaxChars, image.references.maxImages, image.references.maxImageBytes].every((item) => Number.isInteger(item) && item >= 0) || !Number.isInteger(image.maxOutputs) || image.maxOutputs < 1) return null;
+    if (!["none", "size", "aspect_ratio"].includes(image.size.parameter) || !Array.isArray(image.size.values) || !Array.isArray(image.quality.values)) return null;
+    if (image.size.parameter !== "none" && (!image.size.default || (!image.size.allowCustom && !image.size.values.includes(image.size.default)))) return null;
+    if (image.quality.supported && !image.quality.values.includes(image.quality.default)) return null;
+    return structuredClone(image);
+}
+
+export function isSeedance2Family(protocol: ModelProtocol | undefined, modelName: string) {
     return Boolean(protocol && ["openai", "openai-videos", "newapi", "newapi-channel-2", "volcengine-ark-video", "volcengine-ark-agent-plan-video"].includes(protocol) && String(modelName).toLowerCase().includes("seedance-2"));
 }
 
 export function isSeedance25Model(modelName: string) {
     const base = String(modelName).trim().toLowerCase().split("/").pop() || "";
     return /^seedance-2\.5(?:-|$)/.test(base) || /^(?:doubao|dreamina)-seedance-2[.-]5(?:-|$)/.test(base);
+}
+
+// 输出时长下限官方 4 秒：区间、连续（fractionalMin）和枚举三种已保存配置都要收紧，
+// 枚举里的 -1（自动）保留，管理员配得更严的数值（比如枚举只剩 [5,10]）不受影响。
+export function tightenDocumentedOutputDuration(duration: VideoCapabilityConfig["duration"]): VideoCapabilityConfig["duration"] {
+    const minimum = 4;
+    if (duration.selection === "enum") {
+        const values = (duration.values || []).filter((value) => value === -1 || value >= minimum);
+        // 过滤后没有合法时长时保留空列表：这份配置没有可提交的时长，提交校验会拒绝，
+        // 而不是退回原来的低于 4 秒的值。
+        const kept = values.length ? (values.includes(duration.default) ? duration.default : values.find((value) => value !== -1) ?? values[0]) : duration.default;
+        return { ...duration, values, default: kept };
+    }
+    const min = Math.max(minimum, duration.min || 0);
+    const fractionalMin = duration.continuous && duration.fractionalMin && duration.fractionalMin < minimum ? minimum : duration.fractionalMin;
+    const fallback = Math.max(minimum, duration.default);
+    if (min === duration.min && fractionalMin === duration.fractionalMin && fallback === duration.default) return duration;
+    return { ...duration, min, ...(duration.continuous ? { fractionalMin } : {}), default: fallback };
 }
 
 function overlayOfficialSeedance2References(base: VideoCapabilityConfig["references"], is25: boolean): VideoCapabilityConfig["references"] {
@@ -745,7 +874,7 @@ function overlayOfficialSeedance2References(base: VideoCapabilityConfig["referen
         maxAudios: is25 ? 10 : 3,
         maxAudioBytes: 15 * 1024 * 1024,
         maxAudioDurationSeconds: is25 ? 30 : 15,
-        minAudioDurationSeconds: 1.8,
+        minAudioDurationSeconds: 2,
         maxAudioTotalDurationSeconds: is25 ? 30 : 15,
         maxImageBytes: base.maxImageBytes || 30 * 1024 * 1024,
         minImageWidth: 300,
@@ -1335,7 +1464,7 @@ export function normalizeImageValue(profile: ImageCapabilityConfig, value: { siz
     // 预设档位带入请求。仅在 quality 未声明支持时启用，避免与 auto/low/medium/high
     // 这组真实图片质量语义混用。
     const presetTier = !profile.quality.supported ? imagePresetTierForSelection(profile, size) : undefined;
-    const quality = profile.quality.supported
+    const quality = profile.fixedOutputs && profile.size.presets?.length ? "auto" : profile.quality.supported
         ? requestedQuality === "auto" || requestedQuality === "any"
             ? profile.quality.values.includes("auto") ? "auto" : profile.quality.default
             : value.quality && profile.quality.values.includes(value.quality)
@@ -1344,7 +1473,8 @@ export function normalizeImageValue(profile: ImageCapabilityConfig, value: { siz
         : requestedQuality === "1k" || requestedQuality === "2k" || requestedQuality === "4k"
           ? requestedQuality
           : presetTier || profile.quality.default || "auto";
-    const count = String(profile.fixedOutputs || Math.max(1, Math.min(profile.maxOutputs, Math.floor(Math.abs(Number(value.count)) || 1))));
+    const requestedCount = Math.floor(Math.abs(Number(value.count)) || 1);
+    const count = String(profile.fixedOutputs ? (profile.generationOutputs?.includes(requestedCount) ? requestedCount : profile.fixedOutputs) : Math.max(1, Math.min(profile.maxOutputs, requestedCount)));
     const transparentBackground = profile.transparentBackground.supported && value.transparentBackground === "true" ? "true" : "false";
     return { size, quality, count, transparentBackground };
 }
@@ -1411,14 +1541,28 @@ function normalizeRangeDuration(profile: VideoCapabilityConfig, value: number) {
     const step = profile.duration.step || 1;
     const candidate = Number.isFinite(value) ? (profile.duration.continuous ? value : Math.floor(value)) : profile.duration.default;
     const clamped = Math.min(max, Math.max(min, candidate));
-	if (profile.duration.continuous) return clamped;
+    if (profile.duration.continuous) return clamped;
     const maxStep = Math.max(0, Math.floor((max - min) / step));
     return min + Math.min(maxStep, Math.max(0, Math.round((clamped - min) / step))) * step;
 }
 
+// 把模型支持的输出时长写成能照着改的说法：「4–15 秒」「5、10 秒」「自动 或 4–15 秒」。
+export function videoDurationRequirement(duration: VideoCapabilityConfig["duration"]): string {
+    if (duration.selection === "enum") {
+        const manual = (duration.values || []).filter((value) => value !== -1).map((value) => String(value));
+        const parts: string[] = [];
+        if ((duration.values || []).includes(-1)) parts.push("自动");
+        if (manual.length) parts.push(`${manual.join("、")} 秒`);
+        return parts.length ? parts.join(" 或 ") : "";
+    }
+    const min = duration.continuous ? duration.fractionalMin ?? duration.min ?? 1 : duration.min || 1;
+    const max = duration.max || min;
+    return `${min}–${max} 秒`;
+}
+
 export function videoDurationOptions(profile: VideoCapabilityConfig) {
     if (profile.duration.selection === "enum") return profile.duration.values || [];
-	if (profile.duration.continuous) return [profile.duration.fractionalMin || profile.duration.min || .92,...Array.from({length:15},(_,i)=>i+1)];
+    if (profile.duration.continuous) return [profile.duration.fractionalMin || profile.duration.min || .92,...Array.from({length:15},(_,i)=>i+1)];
     const min = profile.duration.min || 1;
     const max = profile.duration.max || min;
     const step = profile.duration.step || 1;
@@ -1426,6 +1570,7 @@ export function videoDurationOptions(profile: VideoCapabilityConfig) {
 }
 
 export function videoDurationAllowed(profile: VideoCapabilityConfig, value: number) {
+    if (profile.durationSupported === false) return true;
     if (value === -1) return (profile.duration.values || []).includes(-1);
     if (profile.duration.selection === "enum") return (profile.duration.values || []).includes(value);
     const min = profile.duration.continuous ? profile.duration.fractionalMin || profile.duration.min || .92 : profile.duration.min || 1;

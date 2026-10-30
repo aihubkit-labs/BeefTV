@@ -78,8 +78,13 @@ func (s *AssistantScope) Allows(op *operations.Op, params json.RawMessage) error
 			return nil
 		}
 		return denied("只能搜索当前画布所属项目")
-	case "skill.catalog":
+	case "skill.catalog", "skill.market.search", "skill.market.get", "skill.market.file":
 		return nil
+	case "skill.publish.status":
+		if args.CanvasID == s.CanvasID {
+			return nil
+		}
+		return denied("只能查看当前画布准备的投稿")
 	case "skill.get", "skill.file":
 		pin := skills.Pin{SkillID: args.SkillID, VersionID: args.VersionID, ContentHash: args.ContentHash}
 		if s.SkillPins[pin] || (s.SkillInstalled != nil && s.SkillInstalled(pin)) {
@@ -102,7 +107,7 @@ func (s *AssistantScope) Allows(op *operations.Op, params json.RawMessage) error
 			return nil
 		}
 		return denied("这个素材与当前画布无关，也没有被本次对话引用")
-	case "media.overview", "media.inspect", "media.check":
+	case "media.overview", "media.inspect", "media.check", "media.review":
 		if args.CanvasID != s.CanvasID {
 			return denied("只能检查当前画布关联的媒体")
 		}

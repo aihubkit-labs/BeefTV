@@ -77,7 +77,7 @@ test("fresh generic OpenAI catalog entries retain real portrait quotes through r
     for (const item of catalog) {
         const profile = reloaded.channels[0]!.modelProfiles!.find((profile) => profile.model === item.id)!;
         expect(profile.capability).toBe("video");
-        expect(profile.protocol).toBe("newapi");
+        expect(profile.protocol).toBe("openai-videos");
         expect(profile.videoPricing).toEqual(item.videoPricing);
         expect(profile.videoCapabilitiesVersion).toBe(item.videoCapabilitiesVersion);
         expect(modelCompatibilityError(reloaded, `beefapi::${item.id}`, { capability: "video", input: { textCount: 1, imageCount: 1, videoCount: 0, audioCount: 0, characterCount: 0 } })).toBe("");
@@ -102,6 +102,18 @@ test("catalog import stores managed video capabilities and version", () => {
     expect(profiles[0]?.videoCapabilitiesVersion).toBe("cap-v1");
     expect(profiles[0]?.capabilityConfig?.video?.references.maxVideos).toBe(2);
     expect(profiles[0]?.capabilityConfig?.video?.references.maxAudios).toBe(1);
+});
+
+test("catalog zero prompt ceiling and UTF-16 limit survive import and reload", () => {
+    const video = sampleVideo(0, 0);
+    video.references.promptMaxChars = 0;
+    video.references.promptMaxUtf16Units = 1000;
+    const channel = createModelChannel({ id: "beefapi", baseUrl: "https://enterprise.beefapi.com", models: ["gen4_turbo"] });
+    const profiles = mergeFetchedChannelModelProfiles(channel, [{ id: "gen4_turbo", modelType: "video", videoCapabilities: video, videoCapabilitiesVersion: "utf16-v1" }]);
+    const config = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [{ ...channel, modelProfiles: profiles }] } }).config;
+    const references = modelCapabilityConfigFor(config, "beefapi::gen4_turbo").video!.references;
+    expect(references.promptMaxChars).toBe(0);
+    expect(references.promptMaxUtf16Units).toBe(1000);
 });
 
 test("refresh replaces managed capabilities and keeps the new version", () => {
@@ -147,12 +159,25 @@ test("explicit zero limits stay zero for a server-sourced BeefAPI capability", (
     expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxAudios).toBe(0);
 });
 
-test("legacy BeefAPI Seedance still repairs unsigned zero catalogs", () => {
+test("legacy BeefAPI Seedance waits for a versioned server declaration", () => {
     const model = "seedance-2.0";
-    const config = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [legacyZeroVideo(model)] } }).config;
+    const repaired = legacyZeroVideo(model);
+    repaired.modelProfiles![0]!.capabilityConfig = {
+        version: 1,
+        video: {
+            ...sampleVideo(3, 3),
+            references: {
+                ...sampleVideo(3, 3).references,
+                maxImages: 9,
+                maxVideos: 3,
+                maxAudios: 3,
+            },
+        },
+    };
+    const config = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [repaired] } }).config;
     expect(config.channels[0]?.modelProfiles?.[0]?.videoCapabilitiesVersion).toBeUndefined();
-    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxVideos).toBe(3);
-    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).video!.references.maxAudios).toBe(3);
+    expect(modelCapabilityConfigFor(config, `beefapi::${model}`).videoCapabilitiesUnavailable).toBe(true);
+    expect(modelCompatibilityError(config, `beefapi::${model}`, { capability: "video" })).toContain("刷新模型列表");
 });
 
 test("invalid or missing catalog video does not clear a good sourced profile", () => {
@@ -225,9 +250,21 @@ test("sanitizeServerVideoCapability rejects non-finite values and keeps omitted 
     expect(partial?.references.maxAudios).toBeUndefined();
 });
 
-test("native Ark Seedance 2.x uses the documented 407696 pixel floor", () => {
+test("native Ark Seedance 2.x uses the documented 407696 pixel floor from backend capabilityConfig", () => {
+    const capabilityConfig = {
+        version: 1,
+        video: {
+            ...sampleVideo(3, 3),
+            references: {
+                ...sampleVideo(3, 3).references,
+                minVideoPixels: 407696,
+                maxVideoPixels: 927408,
+                minVideoDurationSeconds: 2,
+            },
+        },
+    };
     const profile = modelCapabilityConfigFor(
-        { channels: [{ id: "ark", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", models: ["seedance-2.0"], modelProfiles: [{ model: "seedance-2.0", protocol: "volcengine-ark-video" }] }] },
+        { channels: [{ id: "ark", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", models: ["seedance-2.0"], modelProfiles: [{ model: "seedance-2.0", protocol: "volcengine-ark-video", capabilityConfig }] }] },
         "ark::seedance-2.0",
     ).video!;
     expect(profile.references.minVideoPixels).toBe(407696);

@@ -5,6 +5,38 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Camera coordinates are observed on the viewport itself. The world receives
+   its transform directly; inheriting these values needlessly restyles nodes. */
+@property --canvas-live-x {
+    syntax: "*";
+    inherits: false;
+    initial-value: 0;
+}
+
+@property --canvas-live-y {
+    syntax: "*";
+    inherits: false;
+    initial-value: 0;
+}
+
+@property --canvas-live-scale {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 1;
+}
+
+@property --canvas-live-inverse-scale {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 1;
+}
+
+@property --canvas-committed-scale {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 1;
+}
+
 /* =========================================================================
    Design Token System — 三层架构 (Primitive → Semantic → Component)
    这些是产品工作区的共享基础样式。
@@ -11493,20 +11525,8 @@ html:not(.dark) .creation-studio-control:hover,
         text-align: center;
     }
 
-    [data-canvas-viewport-interacting="true"] .canvas-node-shell,
-    [data-canvas-viewport-interacting="true"] .canvas-frame-shell,
-    [data-canvas-viewport-interacting="true"] .aceternity-comet-card {
-        transition: none !important;
-    }
-
-    /* 平移时优先保证世界层合成，暂时关闭每个媒体卡片及其内部浮层的滤镜和阴影绘制。 */
-    [data-canvas-viewport-interacting="true"] :where(.canvas-node-shell, .canvas-frame-shell, .canvas-folder-preview, .canvas-folder-front, .aceternity-comet-card),
-    [data-canvas-viewport-interacting="true"] :where(.canvas-node-shell, .canvas-frame-shell) :where([class*="backdrop-blur"], [class*="shadow-"]) {
-        box-shadow: none !important;
-        filter: none !important;
-        backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
-    }
+    /* Keep card effects stable through camera gestures. Toggling filters and
+       shadows rebuilt WebKit's layer tree at every gesture boundary. */
 
     /* LibTV 式默认选择光标：短促圆润的黑色箭头配细白描边，不使用发光或阴影。 */
     .canvas-cursor-select {
@@ -11531,14 +11551,11 @@ html:not(.dark) .creation-studio-control:hover,
         cursor: grab !important;
     }
 
-    [data-canvas-pan-state="grabbing"] [data-node-id] {
-        cursor: grabbing !important;
-    }
-
     /* 静止期用最终倍率重新排版 DOM，避免 Windows Chromium 复用交互期的低分辨率合成纹理。 */
     .canvas-world-layer {
         transform: translate(var(--canvas-live-x), var(--canvas-live-y)) scale(var(--canvas-live-scale-ratio));
         transform-origin: 0 0;
+        will-change: transform;
     }
 
     .canvas-world-raster-layer {
@@ -11547,9 +11564,17 @@ html:not(.dark) .creation-studio-control:hover,
         transform-origin: 0 0;
     }
 
-    [data-canvas-viewport-interacting="true"] .canvas-world-layer {
-        transform: translate3d(var(--canvas-live-x), var(--canvas-live-y), 0) scale(var(--canvas-live-scale-ratio));
-        will-change: transform;
+    @supports (font: -apple-system-body) {
+        /* Screen-sized titles counter-scale during zoom. Keep their repaint
+           separate from media; otherwise each title dirties a shared surface
+           containing the full image. Use this only for windows of up to 80
+           mounted nodes. Overlap also promotes unmarked siblings, so partial
+           promotion in a larger world can exceed WebKit's RemoteLayerTree IPC
+           limit. Larger windows keep normal rendering and all their nodes. */
+        [data-canvas-world-raster-layer]:not(:has(> .node-element:nth-of-type(81))) > .node-element > .canvas-node-external-header,
+        [data-canvas-world-raster-layer]:not(:has(> .node-element:nth-of-type(81))) > .node-element > .canvas-node-shell {
+            will-change: transform;
+        }
     }
 
     [data-canvas-viewport-interacting="true"] :where(.canvas-connection-flow, .canvas-connection-comet, .canvas-connection-draft) {
@@ -11564,6 +11589,19 @@ html:not(.dark) .creation-studio-control:hover,
         animation-play-state: paused !important;
         filter: none !important;
         backdrop-filter: none !important;
+    }
+
+    /* 节点内的徽章和按钮也用了毛玻璃。WebKit 每帧都要对底下的图片重新取样模糊，
+       平移、缩放时先关掉，手势结束后恢复。 */
+    [data-canvas-viewport-interacting="true"] [data-canvas-world-layer] :where(*, *::before, *::after) {
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+    }
+
+    /* 平移、缩放期间每条连线只画一条单色主线：底衬描边、光晕、端点、流光都先不画。
+       透明的点击路径不产生绘制，保留不动。 */
+    [data-canvas-viewport-interacting="true"] g[data-canvas-connection-id] > :not(.canvas-connection-line, [data-connection-id], defs) {
+        display: none;
     }
 
     /* 节点状态徽章 success 淡出动画（对应 #97 决策2）*/
@@ -11998,6 +12036,18 @@ html:not(.dark) .creation-chat-reference:hover:not(:disabled) { background: rgba
     gap: 12px;
     padding: 6px 12px 12px 14px;
 }
+
+/* 提交前被拦下的说明：写清哪一项、现在多少、要改成多少，放在输入框内始终可见。 */
+.creation-composer-notice {
+    margin: 0;
+    padding: 0 18px 8px;
+    color: var(--creation-warning, #f5a524);
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.creation-chat-composer.is-empty .creation-composer-notice { padding: 0 24px 8px; }
 
 .creation-chat-controls {
     display: flex;
@@ -12797,6 +12847,11 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     gap: var(--space-1-half);
 }
 
+.director-workbench-property-dock,
+.director-workbench-sidebar {
+    --director-sequencer-border: var(--cn-stroke);
+}
+
 .director-actor-inspector {
     display: flex;
     flex-direction: column;
@@ -12832,12 +12887,12 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     width: 100%;
     min-height: 36px;
     border-radius: var(--r-md);
-    background: #f7f7f7;
-    color: #171717;
+    background: var(--cn-text);
+    color: var(--background);
     font-weight: 600;
 }
 
-.director-actor-path-create:hover { background: #e8e8e8; }
+.director-actor-path-create:hover { opacity: 0.9; }
 
 .director-actor-inspector > label {
     margin: var(--space-4) var(--space-4) 0;
@@ -12851,9 +12906,9 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     height: 28px;
     border: 0;
     border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--cn-fill);
     box-shadow: none;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 12px;
 }
 
@@ -12877,8 +12932,8 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     gap: var(--space-1);
     padding-left: var(--space-2);
     border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.48);
+    background: var(--cn-fill);
+    color: var(--cn-muted);
     font-size: 12px;
 }
 
@@ -12888,13 +12943,13 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     height: 100%;
     flex: 0 0 22px;
     place-items: center;
-    border-left: 1px solid rgba(0, 0, 0, 0.2);
+    border-left: 1px solid var(--cn-stroke);
     border-radius: 0 var(--r-md) var(--r-md) 0;
-    color: rgba(255, 255, 255, 0.72);
-    background: rgba(255, 255, 255, 0.04);
+    color: var(--cn-muted);
+    background: var(--cn-fill);
 }
 
-.director-actor-axis-key:hover { background: rgba(255, 255, 255, 0.1); }
+.director-actor-axis-key:hover { background: color-mix(in srgb, var(--cn-text) 12%, transparent); }
 .director-actor-axis-key > span {
     width: 7px;
     height: 7px;
@@ -12910,7 +12965,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     border: 0;
     outline: 0;
     background: transparent;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     appearance: textfield;
@@ -12955,8 +13010,8 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     gap: var(--space-1);
     padding-inline: var(--space-2);
     border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.48);
+    background: var(--cn-fill);
+    color: var(--cn-muted);
     font-size: 12px;
 }
 
@@ -12966,7 +13021,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     border: 0;
     outline: 0;
     background: transparent;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 12px;
     text-transform: uppercase;
 }
@@ -13003,7 +13058,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     font-size: 13px;
 }
 
-.director-inspector-section-title > span:last-child {
+.director-inspector-section-title > span:last-child:not(:only-child) {
     color: var(--workspace-accent);
 }
 
@@ -13020,8 +13075,8 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     overflow: hidden;
     border: 0;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.7);
+    background: color-mix(in srgb, var(--cn-text) 8%, transparent);
+    color: var(--cn-text);
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -13029,13 +13084,13 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 }
 
 .director-pose-button:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: #f7f7f7;
+    background: color-mix(in srgb, var(--cn-text) 12%, transparent);
+    color: var(--cn-text);
 }
 
 .director-pose-button.is-active {
-    background: rgba(255, 255, 255, 0.14);
-    color: #f7f7f7;
+    background: color-mix(in srgb, var(--cn-text) 18%, transparent);
+    color: var(--cn-text);
 }
 
 .director-actor-inspector > .director-pose-adjust-header {
@@ -13046,7 +13101,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 
 .director-pose-adjust-header > div {
     height: 28px;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 13px;
 }
 
@@ -13055,7 +13110,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 }
 
 .director-pose-controls h4 {
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--cn-muted);
     font-size: 13px;
     font-weight: 500;
     opacity: 1;
@@ -13066,7 +13121,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 }
 
 .director-pose-controls .director-bone-axis-row > span {
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--cn-muted);
     font-size: 13px;
     font-weight: 400;
     opacity: 1;
@@ -13074,17 +13129,17 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 
 .director-pose-controls .ant-slider-rail {
     height: 4px;
-    background: rgba(255, 255, 255, 0.22);
+    background: color-mix(in srgb, var(--cn-text) 25%, transparent);
 }
 
 .director-pose-controls .ant-slider-track {
     height: 4px;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--cn-text);
 }
 
 .director-pose-controls .ant-slider-handle::after {
-    background: #fff;
-    border: 1px solid #262626;
+    background: var(--cn-text);
+    border: 1px solid var(--background);
     box-shadow: none;
 }
 
@@ -13094,20 +13149,20 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     height: 28px;
     border: 0;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--cn-fill);
     box-shadow: none;
 }
 
 .director-pose-controls .ant-input-number-input {
     height: 28px;
     padding: 0 8px;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 13px;
     text-align: center;
 }
 
 .director-pose-controls .ant-input-number:focus-within {
-    background: rgba(255, 255, 255, 0.13);
+    background: color-mix(in srgb, var(--cn-text) 13%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -21426,3 +21481,7 @@ main[data-libtv-readonly-dense="true"] .canvas-floating-dock {
 .canvas-model-picker-description {
     display: none !important;
 }
+
+/* Compact material drag previews do not cover the workflow drop target. */
+[data-canvas-compact-drag="true"] { pointer-events: none !important; z-index: 999 !important; }
+[data-canvas-compact-drag="true"] .canvas-node-external-header { visibility: hidden; }

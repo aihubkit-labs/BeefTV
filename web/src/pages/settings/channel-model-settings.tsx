@@ -11,7 +11,9 @@ import { ModelCapabilityEditor } from "@/components/model-capability-editor";
 import { type ModelCapabilityChoice } from "@/components/model-protocol-picker";
 import { defaultModelCapabilityConfig } from "@/lib/model-capabilities";
 import { defaultProtocolForCapability, defaultProtocolForModel, inferProtocolCapabilityFromModel, modelProtocolCapability, modelProtocolDefinition, type ModelProtocol, type ModelProtocolDefinition } from "@/lib/model-protocols";
+import { signatureCredentialHint } from "@/lib/service-credentials";
 import { fetchPluginProviderCatalog } from "@/services/api/plugin-catalog";
+import { normalizeModelCapabilityDraft } from "@/services/api/workspace";
 import { modelOptionName, type ModelChannel } from "@/stores/use-config-store";
 import { currentModelConnectionReceipt, useModelConnectionTests } from "@/stores/use-model-connection-tests";
 
@@ -60,6 +62,26 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
         onChange(next.filter((item) => channel.models.includes(item.model)));
     };
 
+    const refreshBackendCapability = (model: string, capability: ModelCapabilityChoice, protocol?: ModelProtocol) => {
+        if (draft || !protocol || (capability !== "image" && capability !== "video" && capability !== "text")) return;
+        void normalizeModelCapabilityDraft({
+            channelId: channel.id,
+            baseUrl: channel.baseUrl,
+            capability,
+            protocol,
+            model,
+        })
+            .then((normalized) => {
+                const resolved = normalized.capabilityConfig || normalized;
+                if (resolved && typeof resolved.version === "number" && (resolved.video || resolved.image || resolved.text)) {
+                    updateProfile(model, { protocol, capability, capabilityConfig: resolved });
+                }
+            })
+            .catch(() => {
+                // Keep local fallback when the backend capability endpoint is unreachable.
+            });
+    };
+
     const testModel = async (model: string, capability: ModelProfile["capability"], protocol: ModelProtocol) => {
         setTestingModel(model);
         try {
@@ -79,6 +101,7 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
     const inferredProtocol = activeModel ? (inferProtocolCapabilityFromModel(activeModel) === "video" ? channel.interfaceType || "" : defaultProtocolForModel(activeModel, availableProtocols)) : "";
     const activeProtocol = activeModelProfile ? activeModelProfile.protocol || channel.interfaceType || "" : inferredProtocol;
     const activeCapability = activeModelProfile?.capability || modelProtocolCapability(activeProtocol, availableProtocols) || (activeModel ? inferProtocolCapabilityFromModel(activeModel) : "text");
+    const signatureHint = signatureCredentialHint(modelProtocolDefinition(activeProtocol, availableProtocols)?.authType);
 
     return (
         <div className="mt-4">
@@ -151,7 +174,6 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                         key: "protocol",
                         label: "基本信息",
                         children: <div className="space-y-4" inert={Boolean(testingModel)}>
-                            {!testingModel && testResult && <Alert type={testResult.success ? "success" : "error"} title={testResult.detail} showIcon />}
                             <section className="space-y-2">
                                 <div className="text-xs font-medium">模型能力</div>
                                 <Segmented<ModelCapabilityChoice>
@@ -165,6 +187,7 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                                             capability: nextCapability,
                                             capabilityConfig: nextCapability === "image" || nextCapability === "video" ? defaultModelCapabilityConfig(nextProtocol, activeModel) : undefined,
                                         });
+                                        refreshBackendCapability(activeModel, nextCapability, nextProtocol);
                                     }}
                                 />
                             </section>
@@ -177,11 +200,15 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                                     capability={activeCapability}
                                     value={activeProtocol}
                                     protocols={availableProtocols}
-                                    onChange={(nextProtocol) => updateProfile(activeModel, {
-                                        protocol: nextProtocol,
-                                        capabilityConfig: activeCapability === "image" || activeCapability === "video" ? defaultModelCapabilityConfig(nextProtocol, activeModel) : undefined,
-                                    })}
+                                    onChange={(nextProtocol) => {
+                                        updateProfile(activeModel, {
+                                            protocol: nextProtocol,
+                                            capabilityConfig: activeCapability === "image" || activeCapability === "video" ? defaultModelCapabilityConfig(nextProtocol, activeModel) : undefined,
+                                        });
+                                        refreshBackendCapability(activeModel, activeCapability, nextProtocol);
+                                    }}
                                 />
+                                {signatureHint && <p className="text-xs leading-5 text-foreground/58">{signatureHint}</p>}
                             </section>
                         </div>,
                     },
@@ -201,7 +228,9 @@ export function ChannelModelSettings({ channel, onChange, draft = false }: { cha
                         </div>,
                     },
                 ] : []}
-            />
+            >
+                {(tabs) => <>{!testingModel && testResult ? <Alert className="mx-6 mt-4 shrink-0" type={testResult.success ? "success" : "error"} title={testResult.detail} showIcon /> : null}{tabs}</>}
+            </ModelEditorModal>
         </div>
     );
 }

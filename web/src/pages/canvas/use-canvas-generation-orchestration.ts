@@ -34,8 +34,10 @@ import { useCanvasGenerationBatches } from "./use-canvas-generation-batches";
 import { useCanvasGenerationExecutor } from "./use-canvas-generation-executor";
 import { useCanvasGenerationRetry } from "./use-canvas-generation-retry";
 import { useCanvasStoryboard } from "./use-canvas-storyboard";
+import type { CanvasPageUiStoreHook } from "@/stores/canvas/use-canvas-page-ui-store";
 
 type UseCanvasGenerationOrchestrationOptions = {
+    pageUi: CanvasPageUiStoreHook;
     projectId: string;
     /** 生成任务查询与 live 绑定：短剧关闭时为空。 */
     linkedProjectId?: string;
@@ -51,14 +53,12 @@ type UseCanvasGenerationOrchestrationOptions = {
     connectionsRef: { current: CanvasConnection[] };
     setNodes: Dispatch<SetStateAction<CanvasNodeData[]>>;
     setConnections: Dispatch<SetStateAction<CanvasConnection[]>>;
-    setSelectedNodeIds: Dispatch<SetStateAction<Set<string>>>;
-    setSelectedConnectionId: Dispatch<SetStateAction<string | null>>;
-    setDialogNodeId: Dispatch<SetStateAction<string | null>>;
     setGenerationHistoryOpen: Dispatch<SetStateAction<boolean>>;
     getCanvasCenter: () => Position;
 };
 
 export function useCanvasGenerationOrchestration({
+    pageUi,
     projectId,
     linkedProjectId,
     domainProjectId,
@@ -72,9 +72,6 @@ export function useCanvasGenerationOrchestration({
     connectionsRef,
     setNodes,
     setConnections,
-    setSelectedNodeIds,
-    setSelectedConnectionId,
-    setDialogNodeId,
     setGenerationHistoryOpen,
     getCanvasCenter,
 }: UseCanvasGenerationOrchestrationOptions) {
@@ -111,6 +108,7 @@ export function useCanvasGenerationOrchestration({
     });
 
     const handleGenerateNode = useCanvasGenerationExecutor({
+        pageUi,
         projectId,
         domainProjectId,
         addedSkills,
@@ -119,9 +117,6 @@ export function useCanvasGenerationOrchestration({
         connectionsRef,
         setNodes,
         setConnections,
-        setSelectedNodeIds,
-        setSelectedConnectionId,
-        setDialogNodeId,
         setRunningNodeId,
         startGenerationRequest,
         finishGenerationRequest,
@@ -151,11 +146,12 @@ export function useCanvasGenerationOrchestration({
         syncRowsFromConnections,
         updateRow: updateBatchRow,
     } = useCanvasBatchTable({
+        pageUi,
+        projectId,
         nodesRef,
         connectionsRef,
         setNodes,
         setConnections,
-        setSelectedNodeIds,
         enqueueGenerationBatch,
     });
 
@@ -189,14 +185,16 @@ export function useCanvasGenerationOrchestration({
         updateScriptRow,
         updateScriptRows,
     } = useCanvasStoryboard({
+        pageUi,
         projectId,
         addedSkills,
         nodesRef,
         connectionsRef,
         setNodes,
         setConnections,
-        setSelectedNodeIds,
         enqueueGenerationBatch,
+        startGenerationRequest,
+        finishGenerationRequest,
     });
 
     const handleRetryNode = useCanvasGenerationRetry({
@@ -275,7 +273,7 @@ export function useCanvasGenerationOrchestration({
                     ensureAsset: (item) => ensureCanvasNodeAsset({ canvasId: owner.canvasId, domainProjectId, node: item, source: "canvas-generation", taskId: task.id }),
                     onCommit: (node, insertedNodes) => {
                         setNodes((current) => insertedNodes.reduce((nodes, inserted) => rebaseInsertedCanvasNode(nodes, inserted), current));
-                        setSelectedNodeIds(new Set([node.id]));
+                        pageUi.getState().setSelectedNodeIds(new Set([node.id]));
                         setGenerationHistoryOpen(false);
                         message.success("已从生成历史插入到画布");
                     },
@@ -286,7 +284,7 @@ export function useCanvasGenerationOrchestration({
                 insertingHistory.current.exit();
             }
         },
-        [domainProjectId, getCanvasCenter, lifetime, message, nodesRef, projectId, setGenerationHistoryOpen, setNodes, setSelectedNodeIds],
+        [pageUi, domainProjectId, getCanvasCenter, lifetime, message, nodesRef, projectId, setGenerationHistoryOpen, setNodes],
     );
 
     const reconcileImageBatchRootNode = useCallback(
@@ -305,7 +303,17 @@ export function useCanvasGenerationOrchestration({
             if (root) {
                 const config = buildGenerationConfig(effectiveConfig, root, "image");
                 if (modelCapabilityConfigFor(config, config.model).image?.fixedOutputs) {
-                    void handleRetryNode(root);
+                    if ((root.metadata?.batchChildIds?.length || 0) > (modelCapabilityConfigFor(config, config.model).image?.fixedOutputs || 0)) {
+                        const tasks = new Set<string>();
+                        void (async () => {
+                            for (const child of retryable) {
+                                const taskId = child.metadata?.taskId || child.id;
+                                if (tasks.has(taskId)) continue;
+                                tasks.add(taskId);
+                                await handleRetryNode(child);
+                            }
+                        })();
+                    } else void handleRetryNode(root);
                     return;
                 }
             }
@@ -338,11 +346,11 @@ export function useCanvasGenerationOrchestration({
             connectionsRef.current = created.nextConnections;
             setNodes(created.nextNodes);
             setConnections(created.nextConnections);
-            setSelectedNodeIds(new Set([created.imageNode.id]));
-            setSelectedConnectionId(null);
-            setDialogNodeId(created.imageNode.id);
+            pageUi.getState().setSelectedNodeIds(new Set([created.imageNode.id]));
+            pageUi.getState().setSelectedConnectionId(null);
+            pageUi.getState().setDialogNodeId(created.imageNode.id);
         },
-        [connectionsRef, effectiveConfig, message, nodesRef, setConnections, setDialogNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds],
+        [pageUi, connectionsRef, effectiveConfig, message, nodesRef, projectId, setConnections, setNodes],
     );
 
     return {

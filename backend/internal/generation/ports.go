@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"infinite-canvas/backend/internal/beefapi"
 	"infinite-canvas/backend/internal/outbound"
 )
 
@@ -69,6 +70,7 @@ type LimitsPort interface {
 
 type TransportObservation struct {
 	Request               *http.Request
+	Headers               http.Header
 	StartedAt             time.Time
 	StatusCode            int
 	Body                  []byte
@@ -167,19 +169,27 @@ type DeliveryProgressPort interface {
 	ClearDelivery()
 }
 
+// VideoDownloadCachePort is bound to the owning local task, not a provider URL.
+type VideoDownloadCachePort interface {
+	PartialPath() string
+}
+
 type Runtime struct {
-	ReferenceStorage ReferenceStoragePort
-	Resources        ResourcePort
-	Limits           LimitsPort
-	Receipts         ReceiptPort
-	Stages           StagePort
-	Delivery         DeliveryProgressPort
-	Images           ImageSubmissionPort
-	Workflow         WorkflowPort
-	Prompt           PromptPort
-	Config           ConfigPort
-	Style            StylePort
-	Probe            MediaProbePort
-	Call             CallMeta
-	Endpoints        Endpoints
+	ReferenceStorage  ReferenceStoragePort
+	Resources         ResourcePort
+	Limits            LimitsPort
+	Receipts          ReceiptPort
+	Stages            StagePort
+	Delivery          DeliveryProgressPort
+	DownloadCache     VideoDownloadCachePort
+	ReferenceProgress ReferenceProgressPort
+	Images            ImageSubmissionPort
+	ManagedMedia      beefapi.MediaStatePort
+	Workflow          WorkflowPort
+	Prompt            PromptPort
+	Config            ConfigPort
+	Style             StylePort
+	Probe             MediaProbePort
+	Call              CallMeta
+	Endpoints         Endpoints
 }

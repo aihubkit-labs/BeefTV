@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/prompts"
 	"infinite-canvas/backend/internal/protocol"
 )
@@ -1415,6 +1416,51 @@ func TestRunImageTaskOmitsAutomaticQualityAndSize(t *testing.T) {
 	}
 }
 
+// 第三方图片渠道选择 url 响应格式后必须真的发出 response_format=url，
+// 上游返回的链接原样交给交付层下载落库；没选过取值的渠道继续走内联 base64。
+func TestRunImageTaskHonorsConfiguredResponseFormat(t *testing.T) {
+	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
+	formats := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		format, _ := body["response_format"].(string)
+		formats = append(formats, format)
+		w.Header().Set("Content-Type", "application/json")
+		if format == "url" {
+			_, _ = w.Write([]byte(`{"data":[{"url":"https://cdn.example.com/result.png"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"aGVsbG8="}]}`))
+	}))
+	defer server.Close()
+
+	config := providerConfig{BaseURL: server.URL, APIKey: "key", Model: "third-party-image", InterfaceType: "openai-image"}
+	profile := DefaultImageCapabilityConfig("openai-image", "third-party-image")
+	profile.ResponseFormat = modelcatalog.ImageResponseFormat{Supported: true, Value: modelcatalog.ImageResponseFormatURL}
+	result, err := runImageTask(context.Background(), canvasGenerationInput{Prompt: "a product photo", Config: config, ImageCapability: profile})
+	if err != nil {
+		t.Fatalf("runImageTask() error = %v", err)
+	}
+	if len(formats) != 1 || formats[0] != modelcatalog.ImageResponseFormatURL {
+		t.Fatalf("response_format = %#v, want url", formats)
+	}
+	images, ok := result["images"].([]map[string]string)
+	if !ok || len(images) != 1 || images[0]["dataUrl"] != "https://cdn.example.com/result.png" {
+		t.Fatalf("images = %#v, want the upstream link handed to delivery", result["images"])
+	}
+
+	profile.ResponseFormat = modelcatalog.ImageResponseFormat{Supported: true}
+	if _, err := runImageTask(context.Background(), canvasGenerationInput{Prompt: "a product photo", Config: config, ImageCapability: profile}); err != nil {
+		t.Fatalf("runImageTask() with default format error = %v", err)
+	}
+	if len(formats) != 2 || formats[1] != modelcatalog.ImageResponseFormatBase64 {
+		t.Fatalf("response_format = %#v, want b64_json by default", formats)
+	}
+}
+
 func TestRunOpenAIImageTaskUsesMultipartEditContract(t *testing.T) {
 	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1774,44 +1820,6 @@ func TestBeefAPIAudioURLAcceptsDataAssetAndHTTPS(t *testing.T) {
 
 func TestSeedancePayloadPreservesRequestedResolutionAndDuration(t *testing.T) {
 	capability := DefaultModelCapabilityConfigForModel("newapi-channel-2", "seedance-2.5").Video
-	input := canvasGenerationInput{
-		Prompt:          "make it move",
-		Config:          providerConfig{Model: "seedance-2.0-fast", Size: "16:9", VideoSeconds: "20", VQuality: "1080p"},
-		VideoCapability: capability,
-		ReferenceImages: []providerMedia{{ID: "image-1", DataURL: testReferenceImageDataURL}},
-	}
-	assertReferenceContract := func(body map[string]interface{}) {
-		t.Helper()
-		content, ok := body["content"].([]map[string]interface{})
-		if !ok || len(content) != 1 || content[0]["type"] != "image_url" || content[0]["role"] != "reference_image" {
-			t.Fatalf("single image reference payload = %#v", body)
-		}
-		metadata, ok := body["metadata"].(map[string]interface{})
-		if !ok || metadata["ratio"] != "16:9" {
-			t.Fatalf("selected reference ratio lost: %#v", body)
-		}
-		if _, legacy := body["duration"]; legacy {
-			t.Fatalf("reference request contains legacy duration: %#v", body)
-		}
-	}
-	body, err := beefAPIVideoRequestBody(input)
-	if err != nil {
-		t.Fatalf("beefAPIVideoRequestBody() error = %v", err)
-	}
-	assertReferenceContract(body)
-	if fmt.Sprint(body["resolution"]) != "1080p" || fmt.Sprint(body["seconds"]) != "20" {
-		t.Fatalf("fast 1080/20 payload = %#v", body)
-	}
-	input.Config.VQuality = "2k"
-	input.Config.VideoSeconds = "30"
-	body, err = beefAPIVideoRequestBody(input)
-	if err != nil {
-		t.Fatalf("2k/30 body error = %v", err)
-	}
-	assertReferenceContract(body)
-	if fmt.Sprint(body["resolution"]) != "1440p" || fmt.Sprint(body["seconds"]) != "30" {
-		t.Fatalf("2k/30 payload = %#v", body)
-	}
 	videos, err := seedanceVideosRequestBody(canvasGenerationInput{
 		Prompt:          "make it move",
 		Config:          providerConfig{Model: "seedance-2.5", Size: "16:9", VideoSeconds: "-1"},
@@ -1878,103 +1886,6 @@ func TestSeedanceVideosBodyUsesVideosEndpointFields(t *testing.T) {
 	}
 	if len(body.ReferenceAudios) != 1 || body.ReferenceAudios[0] != "data:audio/mpeg;base64,AAAA" {
 		t.Fatalf("reference_audios = %#v", body.ReferenceAudios)
-	}
-}
-
-func TestBeefAPIVideoBodyUsesFlatFirstFrameContract(t *testing.T) {
-	body, err := beefAPIVideoRequestBody(canvasGenerationInput{
-		Prompt: "make it move",
-		Config: providerConfig{
-			Model:              "seedance-2.0-fast",
-			InterfaceType:      string(model.ChannelInterfaceNewAPIVideo),
-			Size:               "9:16",
-			VQuality:           "480",
-			VideoSeconds:       "6",
-			VideoGenerateAudio: "true",
-			VideoWatermark:     "false",
-		},
-		ReferenceImages: []providerMedia{{ID: "image-1", DataURL: testReferenceImageDataURL}},
-		Metadata:        map[string]interface{}{"videoStartFrameNodeId": "image-1"},
-	})
-	if err != nil {
-		t.Fatalf("beefAPIVideoRequestBody() error = %v", err)
-	}
-	if body["model"] != "seedance-2.0-fast" {
-		t.Fatalf("model = %#v", body["model"])
-	}
-	if body["prompt"] != "make it move" {
-		t.Fatalf("prompt = %#v", body["prompt"])
-	}
-	image, ok := body["image"].(map[string]interface{})
-	if !ok || image["url"] != testReferenceImageDataURL {
-		t.Fatalf("image = %#v", body["image"])
-	}
-	if _, exists := body["aspect_ratio"]; exists {
-		t.Fatalf("first-frame request includes upstream-rejected aspect_ratio: %#v", body)
-	}
-	if body["resolution"] != "480p" || body["duration"] != 6 || body["generate_audio"] != true {
-		t.Fatalf("flat controls = %#v", body)
-	}
-	if _, exists := body["input"]; exists {
-		t.Fatalf("body includes unsupported nested input: %#v", body)
-	}
-	if _, exists := body["parameters"]; exists {
-		t.Fatalf("body includes unsupported nested parameters: %#v", body)
-	}
-}
-
-func TestBeefAPIVideoBodyKeepsAspectRatioWithoutFirstFrame(t *testing.T) {
-	body, err := beefAPIVideoRequestBody(canvasGenerationInput{
-		Prompt: "make it move",
-		Config: providerConfig{Model: "seedance-2.5", Size: "9:16", VQuality: "720p", VideoSeconds: "5"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if body["aspect_ratio"] != "9:16" {
-		t.Fatalf("aspect_ratio = %#v, want 9:16", body["aspect_ratio"])
-	}
-}
-
-func TestBeefAPISeedanceReferenceVideoUsesEnterpriseContentContract(t *testing.T) {
-	body, err := beefAPIVideoRequestBody(canvasGenerationInput{
-		Prompt: "keep the character and follow the reference motion",
-		Config: providerConfig{
-			Model:              "seedance-2.0-fast",
-			InterfaceType:      string(model.ChannelInterfaceNewAPIVideo),
-			Size:               "16:9",
-			VQuality:           "720p",
-			VideoSeconds:       "5",
-			VideoGenerateAudio: "true",
-		},
-		ReferenceImages: []providerMedia{{ID: "image-1", DataURL: testReferenceImageDataURL}},
-		ReferenceVideos: []providerMedia{{ID: "video-1", URL: "https://example.com/motion.mp4"}},
-		Metadata:        map[string]interface{}{"videoEditOperation": "reference_to_video"},
-	})
-	if err != nil {
-		t.Fatalf("beefAPIVideoRequestBody() error = %v", err)
-	}
-	if body["seconds"] != "5" {
-		t.Fatalf("seconds = %#v, want string 5", body["seconds"])
-	}
-	content, ok := body["content"].([]map[string]interface{})
-	if !ok || len(content) != 2 {
-		t.Fatalf("content = %#v, want image and video items", body["content"])
-	}
-	if content[0]["type"] != "image_url" || content[0]["role"] != "reference_image" {
-		t.Fatalf("image content = %#v", content[0])
-	}
-	if content[1]["type"] != "video_url" || content[1]["role"] != "reference_video" {
-		t.Fatalf("video content = %#v", content[1])
-	}
-	metadata, ok := body["metadata"].(map[string]interface{})
-	if !ok || metadata["ratio"] != "16:9" || metadata["generate_audio"] != true {
-		t.Fatalf("metadata = %#v", body["metadata"])
-	}
-	for _, forbidden := range []string{"input", "reference_images", "reference_videos", "aspect_ratio", "duration"} {
-		if _, exists := body[forbidden]; exists {
-			t.Fatalf("enterprise Seedance body contains legacy field %q: %#v", forbidden, body)
-		}
 	}
 }
 

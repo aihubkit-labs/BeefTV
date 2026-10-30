@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -103,7 +104,11 @@ func (p appTaskStagePort) SetStage(ctx context.Context, stage string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return p.service.repo.WithContext(ctx).UpdateTaskStageForLease(p.task.ID, p.task.LeaseOwner, stage)
+	err := p.service.repo.WithContext(ctx).UpdateTaskStageForLease(p.task.ID, p.task.LeaseOwner, stage)
+	if err == nil && stage == "正在取回生成结果" {
+		p.service.logTaskPhase(p.task.ID, "result_transfer_start")
+	}
+	return err
 }
 
 // appTaskDeliveryPort mirrors in-generation result downloads into the same
@@ -111,6 +116,15 @@ func (p appTaskStagePort) SetStage(ctx context.Context, stage string) error {
 type appTaskDeliveryPort struct {
 	service *Service
 	taskID  string
+}
+
+type appTaskDownloadCachePort struct {
+	service        *Service
+	userID, taskID string
+}
+
+func (p appTaskDownloadCachePort) PartialPath() string {
+	return (generationDeliveryMediaAdapter{service: p.service}).artifactDownloadPartialPath(p.userID, p.taskID+":provider")
 }
 
 func (p appTaskDeliveryPort) ReportDelivery(progress outbound.ResumableProgress) {
@@ -128,6 +142,25 @@ func (p appTaskDeliveryPort) ClearDelivery() {
 		return
 	}
 	p.service.deliveryProgressRegistry().clear(taskID + ":0")
+	p.service.logTaskPhase(taskID, "result_transfer_end")
+}
+
+// Store only phase boundaries in the existing task log, never URLs or bytes.
+// Transfer end includes a failed attempt; terminal task status owns success.
+func (s *Service) logTaskPhase(taskID, phase string) {
+	if s.repo == nil {
+		return
+	}
+	task, err := s.repo.Task(taskID)
+	if err != nil || task == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"phase": phase})
+	message := "开始取回生成结果"
+	if phase == "result_transfer_end" {
+		message = "取回生成结果阶段结束"
+	}
+	_ = s.log(task.UserID, task.ID, "info", message, string(payload))
 }
 
 func (p appReceiptPort) Observe(observation generation.TransportObservation) {
@@ -147,6 +180,24 @@ func (p appReceiptPort) Observe(observation generation.TransportObservation) {
 		Outcome:               observation.Outcome,
 	}
 	recordTaskRequestEvidence(observation.Request, evidence, observation.Body, observation.Err)
+	if p.service != nil && p.service.repo != nil {
+		call := canonicalCallMeta(observation.Request.Context())
+		taskID := strings.TrimSpace(call.TaskID)
+		isImage := call.Capability == "image" || strings.HasPrefix(strings.TrimSpace(call.TaskType), "canvas_image")
+		if imgTask, ok := observation.Request.Context().Value(imageTaskContext{}).(model.Task); ok {
+			if taskID == "" {
+				taskID = strings.TrimSpace(imgTask.ID)
+			}
+			if strings.HasPrefix(strings.TrimSpace(imgTask.Type), "canvas_image") {
+				isImage = true
+			}
+		}
+		if taskID != "" && isImage {
+			if jobID := generation.ExtractBeefAPIImageJobID(observation.Headers, observation.Body); jobID != "" {
+				_ = p.service.repo.UpdateTaskImageJobID(taskID, jobID)
+			}
+		}
+	}
 	recordProviderRequest(p.service, observation.Request, observation.StartedAt, observation.StatusCode, observation.Body, observation.Err)
 }
 
@@ -325,6 +376,7 @@ func (s *Service) applyGenerationRuntime(ctx context.Context, meta generation.Ca
 		Limits:           appLimitsPort{service: s},
 		Receipts:         appReceiptPort{service: s},
 		Images:           appImagePort{service: s},
+		ManagedMedia:     appManagedMediaPort{service: s},
 		Workflow:         appWorkflowPort{service: s},
 		Prompt:           appPromptPort{service: s},
 		Config:           appConfigPort{service: s},
@@ -336,9 +388,13 @@ func (s *Service) applyGenerationRuntime(ctx context.Context, meta generation.Ca
 		runtime.Endpoints = existing.Endpoints
 		runtime.Stages = existing.Stages
 		runtime.Delivery = existing.Delivery
+		runtime.ReferenceProgress = existing.ReferenceProgress
 		if !replaceCall {
 			runtime.Call = generation.IdentityCallMeta(existing.Call, meta)
 		}
+	}
+	if s.dataDir != "" && runtime.Call.UserID != "" && runtime.Call.TaskID != "" {
+		runtime.DownloadCache = appTaskDownloadCachePort{service: s, userID: runtime.Call.UserID, taskID: runtime.Call.TaskID}
 	}
 	return generation.WithRuntime(ctx, runtime)
 }

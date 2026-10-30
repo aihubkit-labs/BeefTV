@@ -27,6 +27,7 @@ type VideoBooleanConfig = modelcatalog.VideoBooleanConfig
 
 // Input 是画布生成任务的统一输入合同。
 type Input struct {
+	Upscale          *UpscaleOptions        `json:"upscale,omitempty"`
 	Mode             string                 `json:"mode"`
 	Prompt           string                 `json:"prompt"`
 	Config           Config                 `json:"config"`
@@ -75,6 +76,7 @@ type TextMessage struct {
 
 type Config struct {
 	ChannelID                string                    `json:"channelId"`
+	CredentialRef            string                    `json:"credentialRef,omitempty"`
 	ChannelModelKey          string                    `json:"channelModelKey,omitempty"`
 	VariantID                string                    `json:"variantId,omitempty"`
 	ProviderModelKey         string                    `json:"providerModelKey,omitempty"`
@@ -90,6 +92,11 @@ type Config struct {
 	Size                     string                    `json:"size"`
 	Quality                  string                    `json:"quality"`
 	TransparentBackground    string                    `json:"transparentBackground"`
+	SeedreamMode             string                    `json:"seedreamMode,omitempty"`
+	SeedreamMaxImages        string                    `json:"seedreamMaxImages,omitempty"`
+	SeedreamOutputFormat     string                    `json:"seedreamOutputFormat,omitempty"`
+	SeedreamOptimize         string                    `json:"seedreamOptimize,omitempty"`
+	SeedreamWatermark        string                    `json:"seedreamWatermark,omitempty"`
 	Count                    string                    `json:"count"`
 	VideoSeconds             string                    `json:"videoSeconds"`
 	VQuality                 string                    `json:"vquality"`
@@ -102,6 +109,7 @@ type Config struct {
 	AudioInstructions        string                    `json:"audioInstructions"`
 	SystemPrompt             string                    `json:"systemPrompt"`
 	CapabilityConfig         *ModelCapabilityConfig    `json:"capabilityConfig"`
+	ImageCapabilitiesVersion *string                   `json:"imageCapabilitiesVersion,omitempty"`
 	VideoCapabilitiesVersion *string                   `json:"videoCapabilitiesVersion,omitempty"`
 	WorkflowID               string                    `json:"workflowId"`
 	WebappID                 string                    `json:"webappId"`
@@ -139,6 +147,7 @@ type MediaHydrationPolicy struct {
 
 type ImageResponse struct {
 	Data  []map[string]interface{} `json:"data"`
+	Usage map[string]interface{}   `json:"usage,omitempty"`
 	Error *UpstreamError           `json:"error"`
 	Code  *int                     `json:"code"`
 	Msg   string                   `json:"msg"`

@@ -10,7 +10,6 @@ import (
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/outbound"
 	"infinite-canvas/backend/internal/provider/workflow"
-	"infinite-canvas/backend/internal/providerpreset"
 )
 
 // Execute owns paid-generation orchestration: prompt templates, config,
@@ -48,18 +47,11 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 		return nil, errors.New("无法解析系统渠道配置")
 	}
 	applyCanvasTextStreaming(runtime.Call.TaskType, &input)
-	if input.Mode == "image" && providerpreset.IsBeefAPIEndpoint(input.Config.BaseURL) {
-		if contract, ok := providerpreset.BeefAPIImageContract(input.Config.Model); ok {
-			input.Config.InterfaceType = contract.Protocol
-			input.Config.APIFormat = "openai"
-			input.Config.CapabilityConfig = &ModelCapabilityConfig{Version: 1, Image: modelcatalog.DefaultImageCapabilityConfig(contract.Protocol, input.Config.Model)}
+	if input.Upscale != nil {
+		if err := requireTaskRuntime(ctx); err != nil {
+			return nil, err
 		}
-	}
-	if input.Mode == "video" && providerpreset.IsBeefAPIEndpoint(input.Config.BaseURL) {
-		if contract, ok := providerpreset.BeefAPIVideoContract(input.Config.Model); ok {
-			input.Config.InterfaceType = contract.Protocol
-			input.Config.APIFormat = "openai"
-		}
+		return RunUpscaleTask(ctx, input)
 	}
 
 	if workflow.IsProviderInterface(input.Config.InterfaceType) {
@@ -87,6 +79,9 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 		if err := runtime.Config.ApplyCapabilities(ctx, &input); err != nil {
 			return nil, err
 		}
+	}
+	if input.Mode == "image" && managedConnection(input.Config) {
+		return runManagedImageTask(ctx, input)
 	}
 
 	resumed := ResumedProviderRequestID(ctx) != ""
@@ -120,7 +115,7 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 				return nil, err
 			}
 		}
-		if err := PrepareBeefAPISeedanceReferences(ctx, input.Config, &input, ownedSeedanceMediaReader(ctx, userID)); err != nil {
+		if err := PrepareBeefAPIVideoReferences(ctx, input.Config, &input, ownedSeedanceMediaReader(ctx, userID)); err != nil {
 			return nil, err
 		}
 		if err := prepareFullVideoReferences(ctx, &input, ownedFullVideoMediaReader(ctx, userID)); err != nil {
@@ -141,6 +136,11 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 	}
 
 	if preparing {
+		if runtime.ReferenceProgress != nil {
+			runtime.ReferenceProgress.ClearReference()
+		}
+	}
+	if preparing || (input.Mode == "video" && !resumed) {
 		if err := setExecutionStage(ctx, runtime, "正在提交生成任务"); err != nil {
 			return nil, err
 		}
@@ -199,7 +199,7 @@ func executeWorkflow(ctx context.Context, runtime Runtime, userID string, input 
 	if runtime.Workflow == nil {
 		return nil, errors.New("无法执行工作流任务，请重试")
 	}
-	if preparing {
+	if preparing || (input.Mode == "video" && ResumedProviderRequestID(ctx) == "") {
 		if err := setExecutionStage(ctx, runtime, "正在提交生成任务"); err != nil {
 			return nil, err
 		}
@@ -231,6 +231,12 @@ func applyCanvasTextStreaming(taskType string, input *Input) {
 }
 
 func validatePreparedInput(ctx context.Context, input Input) error {
+	if (input.Mode == "image" && managedConnection(input.Config)) || (input.Mode == "video" && (managedConnection(input.Config) || IsBeefAPIVideoConfig(ctx, input.Config))) {
+		if strings.TrimSpace(input.Config.BaseURL) == "" || strings.TrimSpace(input.Config.APIKey) == "" || strings.TrimSpace(input.Config.Model) == "" {
+			return errors.New("后端生成任务缺少 Base URL、API Key 或模型名")
+		}
+		return nil
+	}
 	if input.Config.APIFormat == "gemini" && input.Config.InterfaceType != string(model.ChannelInterfaceGeminiVeo) && input.Config.InterfaceType != string(model.ChannelInterfaceGeminiImage) {
 		_, hasDeclarativeAgent := agentProtocolAdapterForContext(ctx, input.Config.InterfaceType)
 		if input.AgentRequests == nil || !hasDeclarativeAgent {
@@ -241,6 +247,11 @@ func validatePreparedInput(ctx context.Context, input Input) error {
 		return errors.New("后端生成任务缺少 Base URL、API Key 或模型名")
 	}
 	if err := validateInterfaceForContext(ctx, input.Mode, input.Config.InterfaceType); err != nil {
+		// This local check precedes the create request. A resumed provider task,
+		// however, already has submission evidence that must not be erased.
+		if ResumedProviderRequestID(ctx) == "" {
+			return ProtocolPreparationError{Cause: err}
+		}
 		return err
 	}
 	if IsVolcengineJiMengProtocol(input.Config.InterfaceType) && strings.TrimSpace(input.Config.SecretKey) == "" {

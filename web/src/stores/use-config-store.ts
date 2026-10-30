@@ -380,6 +380,7 @@ export type ModelChannel = {
         referenceMediaTransport?: ReferenceMediaTransport;
         authType?: string;
         capabilityConfig?: ModelCapabilityConfig;
+        imageCapabilitiesVersion?: string;
         videoCapabilitiesVersion?: string;
         videoPricing?: VideoPriceQuote | null;
         logicalModelId?: string;
@@ -405,6 +406,8 @@ export type AiConfig = {
     audioModel: string;
     /** 画布助手模型；为空表示跟随 `textModel`。取值与其他默认模型一致，形如 `channelId::modelId`。 */
     assistantModel: string;
+    /** 默认影音理解模型；为空表示不使用独立多模态模型。 */
+    mediaReviewModel: string;
     audioVoice: string;
     audioFormat: string;
     audioSpeed: string;
@@ -425,6 +428,11 @@ export type AiConfig = {
     quality: string;
     size: string;
     transparentBackground: string;
+    seedreamMode?: string;
+    seedreamMaxImages?: string;
+    seedreamOutputFormat?: string;
+    seedreamOptimize?: string;
+    seedreamWatermark?: string;
     count: string;
     canvasImageCount: string;
 };
@@ -451,6 +459,7 @@ export const defaultConfig: AiConfig = {
     textModel: "",
     audioModel: "",
     assistantModel: "",
+    mediaReviewModel: "",
     audioVoice: "alloy",
     audioFormat: "mp3",
     audioSpeed: "1",
@@ -780,6 +789,7 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
             // 助手模型允许为空（跟随默认文本模型），因此这里只保证类型，
             // 协议与渠道有效性由 `lib/assistant-model` 在读取时裁决。
             assistantModel: typeof config.assistantModel === "string" ? config.assistantModel.trim() : "",
+            mediaReviewModel: typeof config.mediaReviewModel === "string" ? config.mediaReviewModel.trim() : "",
             audioVoice: config.audioVoice || defaultConfig.audioVoice,
             audioFormat: config.audioFormat || defaultConfig.audioFormat,
             audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
@@ -888,6 +898,7 @@ function enrichBeefApiMediaChannel(channel: ModelChannel): ModelChannel {
     const existing = new Map((channel.modelProfiles || []).map((item) => [item.model, item]));
     for (const model of models.filter(isImageModelName)) {
         const current = existing.get(model);
+        if (current?.imageCapabilitiesVersion && current.capabilityConfig?.image) continue;
         // These BeefAPI models use Images, even when an older generic catalog
         // saved a text protocol. Do not rewrite arbitrary custom model routes.
         const contract = beefAPIImageContract(model);
@@ -930,7 +941,9 @@ function enrichBeefApiMediaChannel(channel: ModelChannel): ModelChannel {
         existing.delete(model);
     }
     for (const model of models.filter((model) => isVideoModelName(model) || Boolean(beefAPIVideoContract(model)))) {
+        if (channel.id === "beefapi" || channel.credentialRef === MANAGED_BEEFAPI_CREDENTIAL_REF) continue;
         const current = existing.get(model);
+        if (current?.videoCapabilitiesVersion?.trim() && current.capabilityConfig?.video) continue;
         // Repair known routes using the shared contract; preserve catalog and
         // custom protocols for models whose wire contract is not declared here.
         const protocol = beefApiVideoProtocol(model, current?.protocol);
@@ -1012,8 +1025,8 @@ export function modelOptionName(value: string) {
 }
 
 export function modelDisplayName(config: AiConfig, value: string) {
-	const portrait = seedancePortraitLabel(value);
-	if (portrait) return portrait;
+    const portrait = seedancePortraitLabel(value);
+    if (portrait) return portrait;
     const model = modelOptionName(value);
     const channel = resolveModelChannel(config, value);
     const displayName = channelModelProfile(channel, model)?.displayName?.trim();
@@ -1042,6 +1055,8 @@ export function modelOptionsFromChannels(channels: ModelChannel[]) {
             channel.models
                 .map(normalizeRawModelName)
                 .filter(Boolean)
+                .filter((model) => !model.replace(/^\/+/, "").startsWith("topaz/upscale/"))
+                .filter((model) => !["topaz-standard-v2", "topaz-wonder-3.5", "topaz-proteus", "topaz-starlight-fast-2"].includes(model))
                 .filter((model) => channel.scope !== "system" || hasSystemModelProfile(channel, model))
                 .map((model) => encodeChannelModel(channel.id, model)),
         ),

@@ -155,7 +155,11 @@ func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJ
 	if err != nil {
 		return err
 	}
-	taskDelta := int64(len(resultJSON) + len(publicInputJSON) - len(task.ResultJSON) - len(task.InputJSON))
+	sourceCipher, err := s.captureCanvasWorkflowSource(*task)
+	if err != nil {
+		return err
+	}
+	taskDelta := int64(len(resultJSON) + len(publicInputJSON) + len(sourceCipher) - len(task.ResultJSON) - len(task.InputJSON) - len(task.WorkflowSourceCipher))
 
 	results := make([]model.Result, 0, 2)
 	structuredDelta := int64(0)
@@ -175,10 +179,13 @@ func (s *Service) saveTaskCompletionWithinStorageQuota(task *model.Task, resultJ
 	expectedStatus := task.Status
 	completed := *task
 	completed.Status = model.TaskStatusSucceeded
+	completed.RecoveryOutcome = nil
+	completed.NextPollAt = nil
 	completed.Stage = "任务完成"
 	completed.Progress = 100
 	completed.ResultJSON = string(resultJSON)
 	completed.InputJSON = publicInputJSON
+	completed.WorkflowSourceCipher = sourceCipher
 	completed.CompletedAt = ptr(time.Now())
 	if err := s.repo.SaveTaskCompletion(&completed, expectedStatus, results); err != nil {
 		return err

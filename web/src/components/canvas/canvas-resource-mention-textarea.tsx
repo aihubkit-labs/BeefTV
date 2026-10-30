@@ -4,12 +4,14 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, ChevronRight, FileText, Folder, Image as ImageIcon, Music2, Pencil, Search, UserRound, Video, Workflow } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { canvasPopoverLayer } from "@/lib/canvas/canvas-popover-layer";
 import { usePersonalAssetLibrary } from "@/hooks/use-personal-asset-library";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
-import { buildAssetMentionReferences, canvasResourceDisplayName, canvasResourceMentionToken, findCanvasResourceAutoLinkMatch, type CanvasResourceAutoLinkMatch, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { buildAssetMentionReferences, canvasResourceDisplayName, canvasResourceMentionToken, canvasResourceReferenceInsertText, findCanvasResourceAutoLinkMatch, hasCanvasMentionBoundary as hasMentionBoundary, type CanvasResourceAutoLinkMatch, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import type { AssetCategory } from "@/stores/use-asset-store";
 import { CanvasNodeType } from "@/types/canvas";
 import { useResolvedCanvasResourceReferences } from "./use-resolved-canvas-resource-references";
+import { replaceCanvasReferenceToken, type CanvasReferenceAction, type CanvasReferenceIssue } from "@/lib/canvas/canvas-reference-issues";
 
 type MentionState = {
     start: number;
@@ -48,10 +50,15 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "onChange" | "val
     activeDropReferenceId?: string | null;
     onReferenceFilesDrop?: (reference: CanvasResourceReference, files: File[]) => void;
     autoLinkEnabled?: boolean;
+    nodeSectionLabel?: string;
+    referenceIssues?: CanvasReferenceIssue[];
+    selectedAssetReferences?: CanvasResourceReference[];
+    referenceAction?: CanvasReferenceAction | null;
+    onReferenceActionHandled?: () => void;
 };
 
 export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Props>(function CanvasResourceMentionTextarea(
-    { value, references, onSelectReference, onChange, onSubmit, onKeyDown, className, containerClassName, style, highlightLabels = true, mentionMenuWidth = 320, sendOnEnter = true, onContentSizeChange, includeAssetLibrary = false, activeDropReferenceId, onReferenceFilesDrop, autoLinkEnabled = false, ...props },
+    { value, references, onSelectReference, onChange, onSubmit, onKeyDown, className, containerClassName, style, highlightLabels = true, mentionMenuWidth = 320, sendOnEnter = true, onContentSizeChange, includeAssetLibrary = false, activeDropReferenceId, onReferenceFilesDrop, autoLinkEnabled = false, nodeSectionLabel = "画布节点", referenceIssues = [], selectedAssetReferences = [], referenceAction, onReferenceActionHandled, ...props },
     forwardedRef,
 ) {
     const rawTheme = useActiveTheme();
@@ -64,6 +71,10 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     const pendingSelectionRef = useRef<number | null>(null);
     const pendingScrollTopRef = useRef<number | null>(null);
     const lastRenderedValueRef = useRef("");
+    const lastIssueKeyRef = useRef("");
+    const handledActionRef = useRef<CanvasReferenceAction | null>(null);
+    const replacingTokenRef = useRef<string | null>(null);
+    const issueKey = JSON.stringify(referenceIssues);
     const interactingWithMenuRef = useRef(false);
     const interactingTimerRef = useRef<number | null>(null);
     const [mention, setMention] = useState<MentionState | null>(null);
@@ -112,7 +123,9 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         };
     }, []);
     const canvasReferences = useResolvedCanvasResourceReferences(references);
-    const rawAssetReferences = useMemo(() => includeAssetLibrary ? buildAssetMentionReferences(assets).map((item) => ({ ...item, active: highlightLabels && value.includes(canvasResourceMentionToken(item)) })) : [], [assets, includeAssetLibrary, highlightLabels, value]);
+    const rawAssetReferences = useMemo(() => includeAssetLibrary
+        ? [...new Map([...buildAssetMentionReferences(assets), ...selectedAssetReferences].map((item) => [item.assetId, item])).values()].map((item) => ({ ...item, active: highlightLabels && value.includes(canvasResourceMentionToken(item)) }))
+        : [], [assets, selectedAssetReferences, includeAssetLibrary, highlightLabels, value]);
     const assetReferences = useResolvedCanvasResourceReferences(rawAssetReferences);
     const activeCanvasReferences = useMemo(() => canvasReferences.filter((item) => item.active), [canvasReferences]);
     const availableReferences = useMemo(() => [...(onSelectReference ? canvasReferences : activeCanvasReferences), ...assetReferences], [onSelectReference, canvasReferences, activeCanvasReferences, assetReferences]);
@@ -155,21 +168,22 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         if (!editor || composingRef.current) return;
         const isFocused = document.activeElement === editor;
         const currentValue = serializeEditableValue(editor);
-        if (currentValue === value && lastRenderedValueRef.current === value) {
+        if (currentValue === value && lastRenderedValueRef.current === value && lastIssueKeyRef.current === issueKey) {
             syncInlineMentionPreviews(editor, activeReferences);
             pendingSelectionRef.current = null;
             return;
         }
         const selection = pendingSelectionRef.current ?? (isFocused ? getEditableSelection(editor)?.start ?? null : null);
         const scrollTop = pendingScrollTopRef.current;
-        renderEditableContent(editor, value, activeReferences);
+        renderEditableContent(editor, value, activeReferences, referenceIssues);
+        lastIssueKeyRef.current = issueKey;
         lastRenderedValueRef.current = value;
         if (isFocused && selection !== null) setEditableSelection(editor, selection);
         pendingSelectionRef.current = null;
         reportContentSize(editor);
         if (scrollTop !== null) editor.scrollTop = scrollTop;
         pendingScrollTopRef.current = null;
-    }, [activeReferences, reportContentSize, useRichEditor, value]);
+    }, [activeReferences, reportContentSize, useRichEditor, value, issueKey]);
 
     useLayoutEffect(() => {
         const anchor = useRichEditor ? editorRef.current : textareaRef.current;
@@ -254,6 +268,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     const closeMention = () => {
         setMention(null);
         setActiveIndex(-1);
+        replacingTokenRef.current = null;
     };
 
     const syncMention = (nextValue: string, cursor: number) => {
@@ -276,11 +291,44 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         if (!mention) return;
         const selected = onSelectReference ? onSelectReference(reference) : reference;
         if (!selected) return;
-        const insertText = `${canvasResourceMentionToken(selected)} `;
-        const next = `${value.slice(0, mention.start)}${insertText}${value.slice(mention.end)}`;
+        const replacement = replacingTokenRef.current;
+        // 替换失效引用只更新绑定；普通插入保留提示词中完整写出的名称。
+        const insertText = replacement ? canvasResourceMentionToken(selected) : canvasResourceReferenceInsertText(selected, value.slice(mention.start + 1, mention.end));
+        const next = replacement ? replaceCanvasReferenceToken(value, replacement, insertText) : `${value.slice(0, mention.start)}${insertText}${value.slice(mention.end)}`;
         closeMention();
         updateValue(next, mention.start + insertText.length);
     };
+
+    useEffect(() => {
+        if (!referenceAction || handledActionRef.current === referenceAction) return;
+        handledActionRef.current = referenceAction;
+        onReferenceActionHandled?.();
+        const start = value.indexOf(referenceAction.token);
+        if (start < 0) return;
+        const editor = editorRef.current;
+        if (editor) {
+            const chip = [...editor.querySelectorAll<HTMLElement>("[data-mention-token]")].find((item) => item.dataset.mentionToken === referenceAction.token);
+            editor.focus({ preventScroll: true });
+            if (chip) {
+                editor.querySelectorAll<HTMLElement>("[data-reference-located]").forEach((item) => delete item.dataset.referenceLocated);
+                chip.dataset.referenceLocated = "true";
+                chip.scrollIntoView({ block: "nearest", inline: "nearest" });
+                const range = document.createRange();
+                range.selectNode(chip);
+                const selection = window.getSelection();
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+            } else setEditableSelection(editor, start);
+        } else {
+            textareaRef.current?.focus();
+            textareaRef.current?.setSelectionRange(start, start + referenceAction.token.length);
+        }
+        if (referenceAction.type === "replace") {
+            replacingTokenRef.current = referenceAction.token;
+            setMention({ start, end: start + referenceAction.token.length, query: "" });
+            setActiveIndex(-1);
+        }
+    }, [referenceAction, value]);
 
     const replaceEditableSelection = (insertText: string) => {
         const currentValue = editorRef.current ? serializeEditableValue(editorRef.current) : value;
@@ -296,7 +344,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
 
     const insertAutoLink = (match: CanvasResourceAutoLinkMatch) => {
         const currentValue = editorRef.current ? serializeEditableValue(editorRef.current) : value;
-        const insertText = `${canvasResourceMentionToken(match.reference)} `;
+        const insertText = canvasResourceReferenceInsertText(match.reference, match.query);
         const next = `${currentValue.slice(0, match.start)}${insertText}${currentValue.slice(match.end)}`;
         updateValue(next, match.start + insertText.length);
         setAutoLinkCursor(match.start + insertText.length);
@@ -369,8 +417,10 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
             return index < 0 ? candidates.length - 1 : (index - 1 + candidates.length) % candidates.length;
         });
     };
-    const menu = mention && availableReferences.length && menuAnchor ? (
+    const menu = mention && menuAnchor ? (
         <MentionMenu
+            replacing={Boolean(replacingTokenRef.current)}
+            nodeSectionLabel={nodeSectionLabel}
             anchor={menuAnchor}
             connectedReferences={activeCanvasReferences}
             assetReferences={assetReferences}
@@ -778,7 +828,9 @@ function syncInlineMentionPreviews(editor: HTMLElement, references: CanvasResour
     });
 }
 
-function MentionMenu({ anchor, connectedReferences, assetReferences, filteredReferences, query, cursorOffset, activeReferenceId, preferredWidth, onQueryChange, onClose, onSelect, onNavigate }: {
+function MentionMenu({ anchor, connectedReferences, assetReferences, filteredReferences, query, cursorOffset, activeReferenceId, preferredWidth, onQueryChange, onClose, onSelect, onNavigate, nodeSectionLabel, replacing }: {
+    replacing?: boolean;
+    nodeSectionLabel: string;
     anchor: HTMLElement;
     connectedReferences: CanvasResourceReference[];
     assetReferences: CanvasResourceReference[];
@@ -796,6 +848,7 @@ function MentionMenu({ anchor, connectedReferences, assetReferences, filteredRef
     const selectedRef = useRef(false);
     const [category, setCategory] = useState<AssetCategory | null>(null);
     const [position, setPosition] = useState(() => mentionMenuPosition(anchor, cursorOffset, preferredWidth));
+    const popoverLayer = canvasPopoverLayer(anchor);
 
     useLayoutEffect(() => {
         let frame = 0;
@@ -860,9 +913,9 @@ function MentionMenu({ anchor, connectedReferences, assetReferences, filteredRef
         <div
             ref={menuRef}
             data-canvas-resource-mention-menu="true"
-            className="canvas-resource-mention-menu fixed z-[var(--z-tooltip)]"
+            className="canvas-resource-mention-menu fixed z-[var(--z-dialog-popover)]"
             data-placement={position.showAbove ? "top" : "bottom"}
-            style={{ left: position.left, top: position.top, width: position.width, maxHeight: position.maxHeight, transform: position.showAbove ? "translateY(-100%)" : undefined }}
+            style={{ zIndex: popoverLayer, "--z-dialog-popover": typeof popoverLayer === "number" ? String(popoverLayer) : undefined, left: position.left, top: position.top, width: position.width, maxHeight: position.maxHeight, transform: position.showAbove ? "translateY(-100%)" : undefined } as CSSProperties}
             onPointerDown={stopCanvasInteraction}
             onMouseDown={(event) => {
                 stopCanvasInteraction(event);
@@ -872,11 +925,12 @@ function MentionMenu({ anchor, connectedReferences, assetReferences, filteredRef
             }}
             onClick={(event) => event.stopPropagation()}
         >
+            {replacing ? <div className="flex items-center justify-between gap-3 px-2 py-1 text-[var(--fs-tiny)]"><span>选择替换素材</span><button type="button" onClick={onClose}>取消重新选择</button></div> : null}
             <div className="canvas-resource-mention-search">
                 <Search aria-hidden />
                 <input
                     value={query}
-                    placeholder="搜索节点、素材或技能"
+                    placeholder={nodeSectionLabel === "工作流节点" ? "搜索工作流节点" : "搜索节点、素材或技能"}
                     aria-label="搜索引用素材"
                     onChange={(event) => onQueryChange(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
@@ -934,7 +988,7 @@ function MentionMenu({ anchor, connectedReferences, assetReferences, filteredRef
                     <>
                         {connectedNodes.length ? (
                             <section className="canvas-resource-mention-section">
-                                <h4><span>画布节点</span><small>{connectedNodes.length}</small></h4>
+                                <h4><span>{nodeSectionLabel}</span><small>{connectedNodes.length}</small></h4>
                                 <MentionReferenceList references={connectedNodes} activeReferenceId={activeReferenceId} onSelect={selectReference} />
                             </section>
                         ) : null}
@@ -1054,7 +1108,7 @@ function splitMentionText(value: string, references: CanvasResourceReference[]) 
     references.forEach((reference) => {
         const serializedToken = canvasResourceMentionToken(reference);
         referenceByToken.set(serializedToken, { reference, serializedToken });
-        referenceByToken.set(`@${reference.label}`, { reference, serializedToken });
+        referenceByToken.set(`@${reference.label}`, { reference, serializedToken: `@${reference.label}` });
         if (reference.nodeId && !reference.assetId) referenceByToken.set(`@[node:${reference.nodeId}]`, { reference, serializedToken });
     });
     const tokens = [...referenceByToken.keys()].sort((a, b) => b.length - a.length);
@@ -1076,9 +1130,21 @@ function splitMentionText(value: string, references: CanvasResourceReference[]) 
     return parts;
 }
 
-function renderEditableContent(editor: HTMLElement, value: string, references: CanvasResourceReference[]) {
-    const parts = splitMentionText(value, references);
-    const nodes = parts.map((part) => (part.type === "mention" ? createInlineMentionChip(part.reference, part.token) : document.createTextNode(part.text)));
+function renderEditableContent(editor: HTMLElement, value: string, references: CanvasResourceReference[], issues: CanvasReferenceIssue[]) {
+    const invalid = issues.map((issue): CanvasResourceReference => ({ id: issue.token, nodeId: "", kind: "text", title: issue.title, label: issue.title, mentionToken: issue.token, active: false }));
+    const parts = splitMentionText(value, [...references, ...invalid]);
+    const nodes = parts.map((part) => {
+        if (part.type !== "mention") return document.createTextNode(part.text);
+        const chip = createInlineMentionChip(part.reference, part.token);
+        const issue = issues.find((item) => item.token === part.token);
+        if (issue) {
+            chip.classList.add("is-invalid");
+            if (chip.firstElementChild) chip.firstElementChild.textContent = "!";
+            chip.title = issue.reason;
+            chip.setAttribute("aria-label", `${issue.title}，${issue.reason}`);
+        }
+        return chip;
+    });
     editor.replaceChildren(...nodes);
 }
 
@@ -1089,11 +1155,6 @@ function findNextMentionIndex(value: string, tokens: string[], fromIndex: number
         if (index >= 0 && hasMentionBoundary(value, index + token.length) && (next < 0 || index < next)) next = index;
     });
     return next;
-}
-
-function hasMentionBoundary(value: string, index: number) {
-    const char = value[index];
-    return !char || /\s|[,.!?;:，。！？；：、)\]}】）]/.test(char);
 }
 
 function serializeEditableValue(root: HTMLElement) {
