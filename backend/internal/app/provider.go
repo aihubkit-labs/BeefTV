@@ -138,6 +138,10 @@ func resourceUsesObjectStorage(resource *model.Resource) bool {
 }
 
 func (s *Service) resolveProviderConfig(config providerConfig) (providerConfig, error) {
+	config, extensionErr := s.resolveExtensionConfig(config)
+	if extensionErr != nil {
+		return providerConfig{}, extensionErr
+	}
 	return generation.ResolveProviderConfig(s.repo, s.IsLocalMode(), s.SystemChannel, config)
 }
 

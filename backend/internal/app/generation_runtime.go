@@ -256,18 +256,19 @@ func (s *Service) applyGenerationRuntime(ctx context.Context, meta generation.Ca
 		return bindRequestReceipts(ctx)
 	}
 	runtime := generation.Runtime{
-		ReferenceStorage: s.newReferenceStoragePort(),
-		Resources:        appResourcePort{service: s},
-		Limits:           appLimitsPort{service: s},
-		Receipts:         appReceiptPort{service: s},
-		Images:           appImagePort{service: s},
-		ManagedMedia:     s.mediaAttempts().ManagedPort(),
-		Workflow:         appWorkflowPort{service: s},
-		Prompt:           appPromptPort{service: s},
-		Config:           appConfigPort{service: s},
-		Style:            appStylePort{service: s},
-		Probe:            appMediaProbe{},
-		Call:             meta,
+		SelectReferenceStorage: s.extensions.ReferenceStorage,
+		ReferenceStorage:       s.newReferenceStoragePort(),
+		Resources:              appResourcePort{service: s},
+		Limits:                 appLimitsPort{service: s},
+		Receipts:               appReceiptPort{service: s},
+		Images:                 appImagePort{service: s},
+		ManagedMedia:           s.mediaAttempts().ManagedPort(),
+		Workflow:               appWorkflowPort{service: s},
+		Prompt:                 appPromptPort{service: s},
+		Config:                 appConfigPort{service: s},
+		Style:                  appStylePort{service: s},
+		Probe:                  appMediaProbe{},
+		Call:                   meta,
 	}
 	if existing, ok := generation.RuntimeFromContext(ctx); ok {
 		runtime.Endpoints = existing.Endpoints

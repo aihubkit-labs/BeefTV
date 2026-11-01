@@ -4,7 +4,7 @@ import { readAxiosError, validateGeminiPayload } from "@/services/api/image-resp
 import { geminiApiUrl, geminiHeaders } from "@/services/api/image-transport";
 import { BeefAPIConnectionChangedError, getBeefAPIConnectionEpoch } from "@/services/api/beefapi-connection";
 import { ApiError, http } from "@/services/api/request";
-import { buildApiUrl, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, channelHasManagedCredential, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {
     baseUrl: "https://generativelanguage.googleapis.com",
@@ -73,9 +73,10 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
 export type ChannelModelFetchResult = { models: string[]; catalog: ChannelModelCatalogItem[] };
 
 export async function fetchChannelModels(channel: ModelChannel, viaBackend = false, signal?: AbortSignal): Promise<ChannelModelFetchResult> {
-    const managed = channel.id === "beefapi" && (channel.pinned || Boolean(channel.credentialRef));
+    const managedBeefAPI = channel.id === "beefapi" && (channel.pinned || Boolean(channel.credentialRef));
+    const managedCredential = channelHasManagedCredential(channel);
     const connectionEpoch = getBeefAPIConnectionEpoch();
-    if (managed) {
+    if (managedBeefAPI || managedCredential) {
         viaBackend = true;
     }
     if (!viaBackend) {
@@ -88,15 +89,15 @@ export async function fetchChannelModels(channel: ModelChannel, viaBackend = fal
     }
     try {
         // 登录态由同源后端代取模型目录，避免每个 OpenAI 兼容服务分别维护浏览器 CORS 白名单。
-        const result = await http.post<{ models?: Array<string | ChannelModelCatalogItem> }>(managed ? "/beefapi/connection/models" : "/ai/models", managed ? {} : {
+        const result = await http.post<{ models?: Array<string | ChannelModelCatalogItem> }>(managedBeefAPI ? "/beefapi/connection/models" : "/ai/models", managedBeefAPI ? {} : {
             baseUrl: channel.baseUrl,
-            apiKey: managed ? "" : channel.apiKey,
+            apiKey: managedCredential ? "" : channel.apiKey,
             apiFormat: channel.apiFormat,
             headers: channel.headers,
-            channelId: managed ? channel.id : undefined,
-            credentialRef: managed ? "beefapi-enterprise" : undefined,
+            channelId: managedBeefAPI ? channel.id : undefined,
+            credentialRef: managedCredential ? channel.credentialRef : undefined,
         }, { timeout: 30_000, signal });
-        if (managed && connectionEpoch !== getBeefAPIConnectionEpoch()) throw new BeefAPIConnectionChangedError();
+        if (managedBeefAPI && connectionEpoch !== getBeefAPIConnectionEpoch()) throw new BeefAPIConnectionChangedError();
         const catalog = new Map<string, ChannelModelCatalogItem>();
         for (const item of result.models || []) {
             const entry = typeof item === "string" ? sanitizeChannelModelCatalogItem({ id: item }) : sanitizeChannelModelCatalogItem(item);
