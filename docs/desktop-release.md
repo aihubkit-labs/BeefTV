@@ -14,11 +14,11 @@
 
 `.github/workflows/release-desktop-tag.yml` 在推送 `aihubkit-v*` 标签后触发。GitHub 标签使用独立命名空间 `aihubkit-vMAJOR.MINOR.PATCH`，数字部分必须与 `AIHUBKIT_VERSION=vMAJOR.MINOR.PATCH` 一致；`AIHUBKIT_CHANGELOG.md` 还必须有对应的非空 `## vMAJOR.MINOR.PATCH` 条目。不符合时在构建前失败。官方 `VERSION` 和 `CHANGELOG.md` 始终与上游保持一致，不参与 aihubkit 版本演进。
 
-准备好版本提交后，推送该提交及对应标签。例如 `AIHUBKIT_VERSION` 为 `v1.0.3` 时：
+准备好版本提交后，推送该提交及对应标签。例如 `AIHUBKIT_VERSION` 为 `v1.0.5` 时：
 
 ```bash
-git tag aihubkit-v1.0.3
-git push origin aihubkit-v1.0.3
+git tag aihubkit-v1.0.5
+git push origin aihubkit-v1.0.5
 ```
 
 标签所指的提交必须已包含此工作流及其调用的脚本。Fork 需要启用 GitHub Actions，仓库或组织策略须允许工作流使用 `contents: write` 创建 Release。不需要配置 R2、COS、CNB 或自动更新签名密钥，发布使用 GitHub 自带的 `GITHUB_TOKEN`。
@@ -34,7 +34,7 @@ git push origin aihubkit-v1.0.3
 
 工作流实际执行安装、启动、覆盖安装、用户数据保留和卸载检查，再验证最终 ZIP 中的 CLI；Linux 额外验证最终 ZIP 的桌面窗口和干净 Ubuntu 上的 DEB 系统依赖。安装载荷包含编译后的前端、Go 后端、CLI、Node 助手运行时和官方插件，使用者无需安装开发工具链。Windows 仍需 WebView2；Ubuntu 通过 apt 安装包声明的系统依赖。
 
-四个目标和媒体源码打包作业全部成功后，发布作业核对四份安装包、四份 ZIP、两份 macOS ffprobe 对应源码和一份 FFmpeg WASM 对应源码，生成 `SHA256SUMS.txt`。文件先上传到 draft Release，全部上传成功后才公开；任一目标失败都不会发布不完整的版本。失败后可在 Actions 重跑失败作业，尚未公开的 draft 允许继续上传；已公开的 Release 禁止覆盖，修复需使用新版本和新标签。容器镜像仍由 `publish-images.yml` 独立构建，不再创建同名 Release。
+四个目标和媒体源码打包作业全部成功后，发布作业核对四份安装包、四份 ZIP、两份 macOS ffprobe 对应源码和一份 FFmpeg WASM 对应源码，生成 `SHA256SUMS.txt`。文件先上传到 draft Release，全部上传成功后才公开；任一目标失败都不会发布不完整的版本。仅源代码完全不变的 Runner、网络或外部服务瞬时故障可以在 Actions 重跑失败作业；任何代码、配置或发行说明变更都必须递增 `AIHUBKIT_VERSION`、新增 changelog 条目并推送新标签。已推送的 aihubkit 标签不删除、不移动、不复用，无论对应 Release 是否公开。容器镜像仍由 `publish-images.yml` 独立构建，不再创建同名 Release。
 
 这条 tag 流程构建独立下载包，不注入上游官方更新公钥、不启用官方应用内更新、不激活 R2/COS 更新源，也不触发 CNB 镜像。升级时下载安装新版。需要官方签名自动更新时，仍使用下方的手动 `Release desktop` 流程，并在创建任何 tag 前完成其版本预检。Windows 包未做 Authenticode 签名，macOS 包使用 ad hoc 签名且未做 Apple 公证，首次安装可能需要按系统提示放行；安装步骤见[安装 BeefTV](desktop-install.md)。
 
