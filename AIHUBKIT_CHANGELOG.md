@@ -4,6 +4,11 @@ All notable public changes to the aihubkit distribution of BeefTV are documented
 
 ## Unreleased
 
+## v1.0.5
+
+- 修复全平台安装验收在默认 aihubkit 登录模式下等待本地工作区而超时的问题；安装生命周期测试显式使用官方本地模式，产品启动仍默认进入 aihubkit 登录。
+- 规范 aihubkit 独立发版：已推送的标签不删除、不移动、不复用，任何代码、配置或发行说明变更后均递增版本号发布。
+
 ## v1.0.4
 
 - 延续 v1.0.3 的 aihubkit 账号体系、平台模型和通用临时文件存储能力。
