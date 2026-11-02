@@ -26,6 +26,7 @@ def smoke(archive):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CANVAS_", "BEEFTV_"))}
         # CI has no GPU; the WebView uses software rendering under Xvfb.
         env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+        env["BEEFTV_INTEGRATION"] = "local"
         with (root / "desktop.log").open("w+") as log:
             process = subprocess.Popen([str(app), "--data-dir=" + str(data)], cwd=root, env=env, stdout=log, stderr=log)
             try:
