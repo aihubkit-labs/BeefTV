@@ -378,6 +378,8 @@ def smoke(args):
     with tempfile.TemporaryDirectory(prefix='beeftv-installer-') as directory, ExitStack() as cleanup:
         root = Path(directory)
         env = {k: v for k, v in os.environ.items() if not k.startswith(('CANVAS_', 'BEEFTV_'))}
+        # Installer lifecycle checks must not depend on an external account login.
+        env['BEEFTV_INTEGRATION'] = 'local'
         home = root / 'home'
         home.mkdir()
         env['HOME'] = str(home)

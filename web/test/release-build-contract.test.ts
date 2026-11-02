@@ -102,6 +102,7 @@ describe("desktop release build contract", () => {
         const tagWorkflow = readFileSync(resolve(root, ".github/workflows/release-desktop-tag.yml"), "utf8");
         const installerWorkflow = readFileSync(resolve(root, ".github/workflows/desktop-installers.yml"), "utf8");
         const releaseScript = readFileSync(resolve(root, "scripts/prepare-github-desktop-release.py"), "utf8");
+        const installerSmoke = readFileSync(resolve(root, "scripts/smoke-desktop-installer.py"), "utf8");
 
         expect(version).toMatch(/^v\d+\.\d+\.\d+$/);
         expect(changelog).toContain(`## ${version}`);
@@ -110,6 +111,7 @@ describe("desktop release build contract", () => {
         expect(installerWorkflow).toContain("BEEFTV_RELEASE_VERSION: ${{ inputs.release-version }}");
         expect(releaseScript).toContain("ROOT / 'AIHUBKIT_VERSION'");
         expect(releaseScript).toContain("ROOT / 'AIHUBKIT_CHANGELOG.md'");
+        expect(installerSmoke).toContain("env['BEEFTV_INTEGRATION'] = 'local'");
     });
 
     test("keeps every source file required by the local release gate", () => {
