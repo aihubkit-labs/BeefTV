@@ -4,6 +4,10 @@ All notable public changes to the aihubkit distribution of BeefTV are documented
 
 ## Unreleased
 
+## v1.0.6
+
+- 修复 Linux 便携 ZIP 启动验收仍按默认 aihubkit 登录模式运行的问题；发布冒烟测试显式使用官方本地模式，产品启动仍默认进入 aihubkit 登录。
+
 ## v1.0.5
 
 - 修复全平台安装验收在默认 aihubkit 登录模式下等待本地工作区而超时的问题；安装生命周期测试显式使用官方本地模式，产品启动仍默认进入 aihubkit 登录。
