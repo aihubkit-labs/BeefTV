@@ -1,5 +1,5 @@
 import { protocolForBeefAPICatalog, type ModelProtocolDefinition } from "@/lib/model-protocols";
-import type { AiConfig, ModelChannel } from "@/stores/use-config-store";
+import { normalizeConfigSnapshot, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import type { HubModel } from "./api";
 
 export const hubOrigin = "https://apimodel.aihubkit.com";
@@ -8,6 +8,34 @@ export function hubModelProtocol(model: HubModel) {
     const endpoints = (model.supported_endpoint_types || []).map((value) => value.toLowerCase());
     if (endpoints.includes("openai-video") || endpoints.includes("aihubkit-video")) return "aihubkit-video";
     return protocolForBeefAPICatalog(endpoints) || (endpoints.includes("openai") ? "chat-completion" : undefined);
+}
+
+export function importedHubModels(config: AiConfig) {
+    return config.channels.filter((channel) => channel.credentialRef?.startsWith("aihubkit:")).flatMap((channel) =>
+        channel.models.map((model) => {
+            const profile = channel.modelProfiles?.find((item) => item.model === model);
+            const id = `${channel.id}::${model}`;
+            return {
+                id, model, group: channel.credentialRef!.slice("aihubkit:".length),
+                protocol: profile?.protocol || channel.interfaceType,
+                defaults: (["text", "image", "video", "audio"] as const).filter((capability) => config[`${capability}Model`] === id),
+            };
+        }),
+    );
+}
+
+export function resetHubModels(config: AiConfig, defaults: Partial<AiConfig>): AiConfig {
+    const removed = new Set(config.channels.filter((channel) => channel.credentialRef?.startsWith("aihubkit:")).map((channel) => channel.id));
+    const channels = config.channels.filter((channel) => !removed.has(channel.id));
+    const incoming = defaults.channels || [];
+    if (incoming.some((channel) => channels.some((existing) => existing.id === channel.id))) {
+        throw new Error("默认渠道与已有独立渠道 ID 冲突，请先在模型配置中调整该独立渠道");
+    }
+    const next = { ...config };
+    for (const field of ["model", "textModel", "imageModel", "videoModel", "audioModel", "assistantModel", "mediaReviewModel"] as const) {
+        if (removed.has((next[field] || "").split("::")[0]!)) next[field] = "";
+    }
+    return normalizeConfigSnapshot({ config: { ...next, ...defaults, channels: [...channels, ...incoming] } }).config;
 }
 
 // Import is additive: a refresh cannot discard custom models, protocol choices
@@ -25,7 +53,8 @@ export function importHubModels(config: AiConfig, group: string, models: HubMode
     }
     const channel: ModelChannel = {
         ...previous, id, name: previous?.name || `aihubkit · ${group}`, scope: "user", enabled: true,
-        pinned: true, apiFormat: "openai", interfaceType: "chat-completion", baseUrl: hubOrigin,
+        // Each model owns its protocol; a channel-wide text fallback masks plugin capabilities.
+        pinned: true, apiFormat: "openai", interfaceType: undefined, baseUrl: hubOrigin,
         apiKey: "", secretKey: "", headers: [], hasApiKey: true, credentialRef: "aihubkit:" + group,
         models: [...new Set([...(previous?.models || []), ...models.map((model) => model.id)])],
         modelProfiles: [...profiles.values()],
@@ -35,5 +64,5 @@ export function importHubModels(config: AiConfig, group: string, models: HubMode
         const field = `${profile.capability}Model` as "textModel" | "imageModel" | "videoModel" | "audioModel";
         if (!next[field]) next[field] = `${id}::${profile.model}`;
     }
-    return next;
+    return normalizeConfigSnapshot({ config: next }).config;
 }

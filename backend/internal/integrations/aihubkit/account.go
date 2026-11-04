@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"infinite-canvas/backend/internal/app"
@@ -20,15 +20,16 @@ import (
 )
 
 type account struct {
-	mu      sync.RWMutex
-	client  *client
-	user    User
-	token   string
-	groups  map[string]Group
-	keys    map[string]string
-	dir     string
-	service *app.Service
-	models  []CatalogModel
+	mu                  sync.RWMutex
+	client              *client
+	user                User
+	token               string
+	groups              map[string]Group
+	keys                map[string]string
+	dir                 string
+	service             *app.Service
+	modelImportWarnings []string
+	uploadToAIHubkit    atomic.Bool
 }
 
 func accountScope(origin string, id int) string {
@@ -39,9 +40,6 @@ func accountScope(origin string, id int) string {
 func (a *account) prepare(ctx context.Context) error {
 	if err := a.client.call(ctx, "GET", "/api/user/self/groups", nil, a.token, a.user.ID, &a.groups); err != nil {
 		return err
-	}
-	if _, ok := a.groups[a.user.Group]; !ok {
-		return errors.New("账号默认分组不可用")
 	}
 	a.keys = map[string]string{}
 	b, err := os.ReadFile(filepath.Join(a.dir, "aihubkit-keys.enc"))
@@ -56,11 +54,7 @@ func (a *account) prepare(ctx context.Context) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := a.ensureKey(ctx, a.user.Group); err != nil {
-		return err
-	}
-	_, key, _, _ := a.resolve(credentialPrefix + a.user.Group)
-	return a.client.call(ctx, "GET", "/v1/models", nil, key, 0, &a.models)
+	return a.seedModels(ctx)
 }
 
 func (a *account) ensureKey(ctx context.Context, group string) error {
@@ -141,26 +135,16 @@ func (a *account) resolve(ref string) (string, string, bool, error) {
 func (a *account) configure(s *app.Service) error {
 	a.service = s
 	s.SetExtensions(app.Extensions{ResolveCredential: a.resolve, ReferenceStorage: a.referenceStorage})
-	return a.seedModels()
-}
-
-func (a *account) referenceStorage(config generation.Config) generation.ReferenceStoragePort {
-	if strings.HasPrefix(config.CredentialRef, credentialPrefix) || sameOrigin(config.BaseURL, a.client.origin) {
-		return &accountStorage{account: a}
-	}
 	return nil
 }
 
-func sameOrigin(raw, expected string) bool {
-	target, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || target.Scheme == "" || target.Host == "" || target.User != nil {
-		return false
+func (a *account) referenceStorage(_ generation.Config) generation.ReferenceStoragePort {
+	// The upload preference applies to all model channels independently of
+	// credentials. Returning nil preserves the official storage-settings path.
+	if !a.uploadToAIHubkit.Load() {
+		return nil
 	}
-	origin, err := url.Parse(expected)
-	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.User != nil {
-		return false
-	}
-	return strings.EqualFold(target.Scheme, origin.Scheme) && strings.EqualFold(target.Host, origin.Host)
+	return &accountStorage{account: a}
 }
 
 type accountStorage struct {
@@ -168,8 +152,13 @@ type accountStorage struct {
 	expiresAt time.Time
 }
 
-func (s *accountStorage) Enabled() (bool, error) { return s.account.token != "", nil }
+func (s *accountStorage) Enabled() (bool, error) {
+	return s.account.uploadToAIHubkit.Load() && s.account.token != "", nil
+}
 func (s *accountStorage) Upload(ctx context.Context, userID, resourceID string) (string, error) {
+	if !s.account.uploadToAIHubkit.Load() {
+		return "", errors.New("素材上传方式已变化，请重试以使用当前存储设置")
+	}
 	resource, body, err := s.account.service.OpenResource(userID, resourceID)
 	if err != nil {
 		return "", errors.New("参考文件不存在或不属于当前工作区")

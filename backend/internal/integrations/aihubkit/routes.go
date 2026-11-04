@@ -17,11 +17,12 @@ func (h *Host) publicAction(w http.ResponseWriter, r *http.Request, path string)
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	var input struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Email    string `json:"email"`
-		Code     string `json:"verification_code"`
-		AffCode  string `json:"aff_code"`
+		Username            string `json:"username"`
+		Password            string `json:"password"`
+		Email               string `json:"email"`
+		Code                string `json:"verification_code"`
+		AffCode             string `json:"aff_code"`
+		RememberCredentials bool   `json:"rememberCredentials"`
 	}
 	if decode(r, &input) != nil {
 		reply(w, 400, nil, "输入格式无效", "invalid_request")
@@ -54,12 +55,20 @@ func (h *Host) publicAction(w http.ResponseWriter, r *http.Request, path string)
 		reply(w, 400, nil, "请输入用户名和密码", "invalid_request")
 		return
 	}
+	if input.RememberCredentials && h.cfg.Profile != bootstrap.ProfileDesktop {
+		reply(w, 400, nil, "仅桌面应用支持记住账号密码", "invalid_request")
+		return
+	}
 	user, token, err := h.client.login(ctx, input.Username, input.Password)
 	if err != nil {
 		reply(w, 401, nil, err.Error(), "aihubkit_login_failed")
 		return
 	}
 	a := &account{client: h.client, user: user, token: token, dir: filepath.Join(h.cfg.DataDir, "aihubkit", "accounts", accountScope(h.client.origin, user.ID))}
+	if err = a.loadUploadPreference(); err != nil {
+		reply(w, 500, nil, err.Error(), "upload_preference_failed")
+		return
+	}
 	if err = a.prepare(ctx); err != nil {
 		reply(w, 502, nil, err.Error(), "aihubkit_credentials_failed")
 		return
@@ -90,6 +99,13 @@ func (h *Host) publicAction(w http.ResponseWriter, r *http.Request, path string)
 		reply(w, 500, nil, "无法创建登录会话", "session_failed")
 		return
 	}
+	if h.cfg.Profile == bootstrap.ProfileDesktop {
+		if err = h.saveLoginForm(input.Username, input.Password, input.RememberCredentials); err != nil {
+			_ = inner.Close(context.Background())
+			reply(w, 500, nil, err.Error(), "login_form_failed")
+			return
+		}
+	}
 	h.mu.Lock()
 	h.active = inner
 	h.account = a
@@ -116,6 +132,19 @@ func (h *Host) accountAction(w http.ResponseWriter, r *http.Request, path string
 	var result any
 	var err error
 	switch {
+	case path == "upload-preference" && r.Method == "POST":
+		var input struct {
+			UploadToAIHubkit *bool `json:"uploadToAIHubkit"`
+		}
+		if decode(r, &input) != nil || input.UploadToAIHubkit == nil {
+			reply(w, 400, nil, "请选择素材上传方式", "invalid_request")
+			return
+		}
+		if err = a.saveUploadPreference(*input.UploadToAIHubkit); err != nil {
+			reply(w, 500, nil, err.Error(), "upload_preference_failed")
+			return
+		}
+		result = h.sessionData()
 	case path == "self" && r.Method == "GET":
 		var user User
 		err = a.client.call(r.Context(), "GET", "/api/user/self", nil, a.token, a.user.ID, &user)
@@ -154,15 +183,13 @@ func (h *Host) accountAction(w http.ResponseWriter, r *http.Request, path string
 			reply(w, 400, nil, "分组无效", "invalid_request")
 			return
 		}
-		err = a.ensureKey(r.Context(), input.Group)
-		if err == nil {
-			var models []CatalogModel
-			_, key, _, _ := a.resolve(credentialPrefix + input.Group)
-			err = a.client.call(r.Context(), "GET", "/v1/models", nil, key, 0, &models)
-			if err == nil {
-				result = models
-			}
-		}
+		result, err = a.groupCatalog(r.Context(), input.Group)
+	case path == "default-model-config" && r.Method == "POST":
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		// Return only managed channels. The UI saves the replacement through the
+		// official model-config repository, preserving its revision/secret rules.
+		result, err = a.defaultModelConfig(ctx, map[string]any{})
 	default:
 		reply(w, 404, nil, "接口不存在", "not_found")
 		return

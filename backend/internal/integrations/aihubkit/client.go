@@ -5,8 +5,10 @@ package aihubkit
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -19,6 +21,17 @@ import (
 
 const Origin = "https://apimodel.aihubkit.com"
 const credentialPrefix = "aihubkit:"
+
+var errHubConnection = errors.New("无法连接 aihubkit，请稍后重试")
+
+type hubConnectionError struct {
+	phase     string
+	retryable bool
+}
+
+func (e *hubConnectionError) Error() string {
+	return fmt.Sprintf("%s（%s）", errHubConnection, e.phase)
+}
 
 type User struct {
 	ID          int    `json:"id"`
@@ -77,12 +90,19 @@ func (c *client) call(ctx context.Context, method, path string, payload any, tok
 	if userID > 0 {
 		r.Header.Set("New-Api-User", strconv.Itoa(userID))
 	}
-	resp, err := c.http.Do(r)
+	var trace outbound.TransportTrace
+	resp, err := c.http.Do(trace.Attach(r))
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return errors.New("无法连接 aihubkit，请稍后重试")
+		_, phase := trace.Result(err)
+		label := map[string]string{"dns": "域名解析失败", "connect": "网络或代理连接失败", "tls": "TLS 连接失败", "request": "发送请求时连接中断", "response_wait": "等待响应时连接中断", "response": "读取响应时连接中断"}[phase]
+		if label == "" {
+			label = "网络连接失败"
+		}
+		var certificate *tls.CertificateVerificationError
+		return &hubConnectionError{phase: label, retryable: !errors.As(err, &certificate)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

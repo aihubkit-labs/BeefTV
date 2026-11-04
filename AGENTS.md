@@ -20,10 +20,14 @@ BeefTV（`glanderness/BeefTV`）是面向 AI 影视与短剧创作的工作台�
 
 本仓库基于官方 BeefTV fork，目标是在接入自有 aihubkit 平台的同时，持续、方便地合并官方最新功能。让官方的新画布、新模型、新任务能力自然进入本 fork；自有代码主要维护账号与平台服务适配层。
 
+将改动集中在 aihubkit 模块的首要目的，是减少对官方代码的侵入和长期分叉，降低合并冲突，使本 fork 能随时合并官方源库更新并保持兼容性。实现方案应优先考虑持续同步上游的成本；官方接口或数据合同变化时，优先在 aihubkit 适配层跟进，保留官方新实现。模块隔离不能替代兼容性验证，合并后仍须检查 aihubkit 启用模式与官方本地模式。
+
 - 每次分析新需求，先区分官方通用能力与自有平台能力，明确接入边界及对上游同步的影响，再实施。
-- 平台账号、鉴权、额度、凭据和文件存储协议集中在独立适配层：后端 `backend/internal/integrations/`，前端 `web/src/integrations/`。通过组合根、现有 Provider/Protocol/插件或窄端口接入，平台规则不得散落到画布、任务、资源等官方业务模块。
+- 后续功能、修复和重构的业务代码改动一律集中在 aihubkit 模块：后端 `backend/internal/integrations/aihubkit/`，前端 `web/src/integrations/aihubkit/`；模型协议适配放在 `plugin-packages/` 下对应的 aihubkit 独立插件中。aihubkit 必须保持为可插拔的附加模块，不因接入需求直接修改官方画布、任务、模型配置、资源等核心模块或共享逻辑。
+- 平台账号、鉴权、额度、凭据和文件存储协议集中在上述独立适配层。通过已有组合根、Provider/Protocol/插件或窄端口接入，平台规则不得散落到官方业务模块。相关测试、文档和项目约束可按仓库既有目录维护，但不得借此将业务实现移出 aihubkit 模块。
+- aihubkit 专属构建编排集中在 `scripts/aihubkit/`，复用官方依赖、插件打包、检查和安装脚本；不得复制一套官方构建实现或依赖其他工作区遗留的产物。
 - 优先复用官方功能和数据合同，不复制一套画布、生成队列、模型调用或资源管理流程；保留官方 Provider、Protocol、自定义渠道和插件能力。
-- 官方核心确需修改时，仅增加最小、通用、可选的扩展点；核心不得反向依赖 aihubkit 的具体实现。交付须说明改动必要性、扩展点及合并上游时的关注位置。
+- 现有扩展点无法满足需求时，先说明适配层内的限制、拟改动文件及对上游同步的影响，取得用户对模块外代码改动的明确授权后再实施。经授权修改官方核心时，仅增加最小、通用、可选的扩展点；核心不得反向依赖 aihubkit 的具体实现。交付须说明改动必要性、扩展点及合并上游时的关注位置。
 - 平台适配应可自然启停或替换。保留 `BEEFTV_INTEGRATION=local` 的官方本地运行路径，不以删除平台文件、手工改核心逻辑或静默绕过登录作为切换方式。
 - 验收同时关注平台启用和官方本地模式，检查账号隔离、凭据边界以及原有功能是否保留。合并官方更新时保留官方新增能力，再在适配层修正接入，不用旧版自有实现覆盖官方新逻辑。
 - `VERSION` 和 `CHANGELOG.md` 始终逐字保留官方版本，不用于 aihubkit 发版；aihubkit 独立版本与发行说明只维护在 `AIHUBKIT_VERSION` 和 `AIHUBKIT_CHANGELOG.md`，发布标签使用 `aihubkit-v*` 命名空间。
@@ -128,7 +132,7 @@ BeefTV（`glanderness/BeefTV`）是面向 AI 影视与短剧创作的工作台�
 - 宿主机开发：`backend/` 运行 `CANVAS_BACKEND_DATA_DIR=../.local/project-workbench-debug go run ./cmd/server`，`web/` 使用 Bun 和 Vite；不要用 pnpm/npm 覆盖同一套 `node_modules`，也不要提交 `pnpm-lock.yaml` 或 `package-lock.json`。Docker 热更新使用 `docker-compose.dev.yml`；本地构建运行使用 `docker-compose.local.yml`。
 - 单机 Compose 使用 `docker-compose.yml`（SQLite 数据卷，backend、web），源码构建可叠加 `docker-compose.build.yml`。公网只暴露 web 的 `3000`，backend `8080` 留在 Compose 网络内。
 - 默认不启动 dev server；只有用户明确要求浏览器预览或联调时才启动，并先确认端口、数据目录和现有进程。
-- macOS 本机唯一正式应用路径是 `/Applications/BeefTV.app`。需要更新本机应用时只运行 `./scripts/update-local-beeftv-app.sh`；不将 `build/bin/BeefTV.app` 作为可使用版本保留，不复制、重命名或存档额外 `.app` 副本。
+- macOS 本机唯一正式应用路径是 `/Applications/BeefTV.app`。本 fork 更新本机应用统一运行 `./scripts/aihubkit/update-local-app.sh`，完成工具链、依赖和插件包准备后调用官方 `./scripts/update-local-beeftv-app.sh`；实际安装只由官方更新脚本执行。不将 `build/bin/BeefTV.app` 作为可使用版本保留，不复制、重命名或存档额外 `.app` 副本。
 - 健康检查只能证明入口可用，不能替代登录、SSE、任务生成和资源访问验证。
 
 ## 8. 验证纪律
