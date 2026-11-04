@@ -28,17 +28,20 @@ function validReceipt(overrides = {}) {
   };
 }
 
-test('committed minimal release receipt passes dry-run and matches release tag or HEAD sourceDigest', () => {
+test('committed minimal release receipt matches the source commit that recorded it', () => {
   const dryRunResult = runReleaseGate({ cwd: ROOT_DIR, argv: ['--dry-run'] });
   assert.equal(dryRunResult.mode, 'dry-run');
   assert.equal(dryRunResult.receipt.version, dryRunResult.version);
   assert.equal(dryRunResult.receipt.passed, true);
 
-  const tagCheck = spawnSync('git', ['rev-parse', '--verify', `refs/tags/${dryRunResult.version}`], {
+  // A main-branch receipt may be newer than the published tag, and a fork may
+  // contain later integration changes. Verify the receipt against its own
+  // source commit; the production gate still checks the actual release ref.
+  const targetRef = execFileSync('git', ['log', '-1', '--format=%H', '--', `docs/release-evidence/${dryRunResult.version}.json`], {
     cwd: ROOT_DIR,
     encoding: 'utf8',
-  });
-  const targetRef = tagCheck.status === 0 ? dryRunResult.version : 'HEAD';
+  }).trim();
+  assert.ok(targetRef, 'committed receipt must have a source commit');
   const releaseResult = runReleaseGate({ cwd: ROOT_DIR, argv: ['--ref', targetRef] });
   assert.equal(releaseResult.mode, 'release');
   assert.equal(releaseResult.receipt.sourceDigest, computeSourceDigest(ROOT_DIR, targetRef));
