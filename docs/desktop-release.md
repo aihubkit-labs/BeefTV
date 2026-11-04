@@ -14,12 +14,26 @@
 
 `.github/workflows/release-desktop-tag.yml` 在推送 `aihubkit-v*` 标签后触发。GitHub 标签使用独立命名空间 `aihubkit-vMAJOR.MINOR.PATCH`，数字部分必须与 `AIHUBKIT_VERSION=vMAJOR.MINOR.PATCH` 一致；`AIHUBKIT_CHANGELOG.md` 还必须有对应的非空 `## vMAJOR.MINOR.PATCH` 条目。不符合时在构建前失败。官方 `VERSION` 和 `CHANGELOG.md` 始终与上游保持一致，不参与 aihubkit 版本演进。
 
-准备好版本提交后，推送该提交及对应标签。例如 `AIHUBKIT_VERSION` 为 `v1.0.5` 时：
+发布顺序必须是：本次功能、修复、`AIHUBKIT_VERSION` 和 `AIHUBKIT_CHANGELOG.md` 全部合并到远端 `origin/main` → 刷新远端引用并核对发布提交 → 创建并推送标签。不能只合并功能后在任务分支增加版本提交就打标签，也不能先发布再补合并。
+
+合并完成后，运行以下命令取得并检查发布提交，核对其中的版本号和对应发行说明：
 
 ```bash
-git tag aihubkit-v1.0.5
-git push origin aihubkit-v1.0.5
+git fetch origin refs/heads/main:refs/remotes/origin/main
+release_commit="$(git rev-parse refs/remotes/origin/main)"
+bash scripts/aihubkit/verify-release-main.sh "$release_commit"
+git show "$release_commit:AIHUBKIT_VERSION"
+git show "$release_commit:AIHUBKIT_CHANGELOG.md"
 ```
+
+确认无误后，在同一终端基于上面确定的提交打标签。例如已合并的 `AIHUBKIT_VERSION` 为 `v1.0.8`，且该标签尚未使用时：
+
+```bash
+git tag -a aihubkit-v1.0.8 "$release_commit" -m 'aihubkit v1.0.8'
+git push origin refs/tags/aihubkit-v1.0.8
+```
+
+标签工作流在构建前刷新远端 `main`，并调用同一个脚本检查标签提交是否已包含在该分支历史中。远端无法刷新、缺少 `main` 或提交尚未合入时均停止发布。检查不要求标签始终等于最新分支头，避免主分支后续提交阻止同一发布的重跑。此校验随发布提交中的工作流生效，已发布标签保持不变。
 
 标签所指的提交必须已包含此工作流及其调用的脚本。Fork 需要启用 GitHub Actions，仓库或组织策略须允许工作流使用 `contents: write` 创建 Release。不需要配置 R2、COS、CNB 或自动更新签名密钥，发布使用 GitHub 自带的 `GITHUB_TOKEN`。
 

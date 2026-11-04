@@ -31,6 +31,7 @@ BeefTV（`glanderness/BeefTV`）是面向 AI 影视与短剧创作的工作台�
 - 平台适配应可自然启停或替换。保留 `BEEFTV_INTEGRATION=local` 的官方本地运行路径，不以删除平台文件、手工改核心逻辑或静默绕过登录作为切换方式。
 - 验收同时关注平台启用和官方本地模式，检查账号隔离、凭据边界以及原有功能是否保留。合并官方更新时保留官方新增能力，再在适配层修正接入，不用旧版自有实现覆盖官方新逻辑。
 - `VERSION` 和 `CHANGELOG.md` 始终逐字保留官方版本，不用于 aihubkit 发版；aihubkit 独立版本与发行说明只维护在 `AIHUBKIT_VERSION` 和 `AIHUBKIT_CHANGELOG.md`，发布标签使用 `aihubkit-v*` 命名空间。
+- aihubkit 发版必须先将本次功能、修复、`AIHUBKIT_VERSION` 和 `AIHUBKIT_CHANGELOG.md` 全部合并到远端 `origin/main`，再刷新远端引用、核对该提交的版本和发行说明，并基于确认过的 `origin/main` 提交创建、推送标签。禁止直接给尚未合入远端 `main` 的任务分支提交打发布标签，也不能先发布再补合并。打标签前运行 `bash scripts/aihubkit/verify-release-main.sh <发布提交>`；CI 同样检查标签提交已包含在远端 `main` 历史中，后续主分支前进不影响同一发布的重跑。
 - aihubkit 发布标签一经推送即不可删除、移动或复用。仅源代码完全不变的 Runner 或网络瞬时故障可以重跑同一次工作流；任何代码、配置或发行说明变更后重新发布，都必须递增 `AIHUBKIT_VERSION`、新增 `AIHUBKIT_CHANGELOG.md` 条目并创建新标签。
 - 不做与需求无关的全库重构、格式化或依赖升级，以减少长期分叉和合并冲突。每次交付说明实际验证范围与尚未验证的联调项。
 

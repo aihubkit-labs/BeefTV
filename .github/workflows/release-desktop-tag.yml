@@ -21,6 +21,12 @@ jobs:
       release-version: ${{ steps.release-metadata.outputs.release_version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require release commit merged into origin/main
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/aihubkit/verify-release-main.sh "refs/tags/$RELEASE_TAG"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
