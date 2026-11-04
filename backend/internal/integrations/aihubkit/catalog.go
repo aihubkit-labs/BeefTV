@@ -183,7 +183,7 @@ func (a *account) defaultModelConfig(ctx context.Context, config map[string]any)
 		if existingIDs[id] {
 			return defaultModelConfigResult{}, fmt.Errorf("%s默认渠道与已有独立渠道 ID 冲突，请先在模型配置中调整该独立渠道", rule.label)
 		}
-		channel := map[string]any{"id": id, "name": "aihubkit · " + rule.group, "scope": "user", "enabled": true, "pinned": true, "apiFormat": "openai", "baseUrl": a.client.origin, "apiKey": "", "hasApiKey": true, "credentialRef": credentialPrefix + rule.group, "models": []string{model}, "modelProfiles": []map[string]any{{"model": model, "capability": rule.capability, "protocol": rule.protocol}}}
+		channel := map[string]any{"id": id, "name": a.client.displayName() + " · " + rule.group, "scope": "user", "enabled": true, "pinned": true, "apiFormat": "openai", "baseUrl": a.client.upstreamOrigin(), "apiKey": "", "hasApiKey": true, "credentialRef": credentialPrefix + rule.group, "models": []string{model}, "modelProfiles": []map[string]any{{"model": model, "capability": rule.capability, "protocol": rule.protocol}}}
 		channels = append(channels, channel)
 		config[rule.capability+"Model"] = id + "::" + model
 	}

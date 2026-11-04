@@ -1,0 +1,7 @@
+{
+  "brands": [
+    { "id": "zmodel", "origin": "https://model.aihubkit.com" },
+    { "id": "shanzhu", "origin": "https://shanzhu.aihubkit.com" },
+    { "id": "aiyunda", "origin": "https://model.aiyunda.com" }
+  ]
+}

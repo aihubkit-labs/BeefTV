@@ -64,7 +64,7 @@ func (h *Host) publicAction(w http.ResponseWriter, r *http.Request, path string)
 		reply(w, 401, nil, err.Error(), "aihubkit_login_failed")
 		return
 	}
-	a := &account{client: h.client, user: user, token: token, dir: filepath.Join(h.cfg.DataDir, "aihubkit", "accounts", accountScope(h.client.origin, user.ID))}
+	a := &account{client: h.client, user: user, token: token, dir: filepath.Join(h.cfg.DataDir, "aihubkit", "accounts", accountScope(h.client.accountOrigin(), user.ID))}
 	if err = a.loadUploadPreference(); err != nil {
 		reply(w, 500, nil, err.Error(), "upload_preference_failed")
 		return

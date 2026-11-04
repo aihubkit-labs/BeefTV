@@ -2,7 +2,19 @@ import { protocolForBeefAPICatalog, type ModelProtocolDefinition } from "@/lib/m
 import { normalizeConfigSnapshot, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import type { HubModel } from "./api";
 
-export const hubOrigin = "https://apimodel.aihubkit.com";
+export function synchronizeHubModelBrand(config: AiConfig, brand: { apiOrigin: string; platformName: string }): AiConfig {
+    let changed = false;
+    const channels = config.channels.map((channel) => {
+        if (!channel.credentialRef?.startsWith("aihubkit:")) return channel;
+        const suffix = ` · ${channel.credentialRef.slice("aihubkit:".length)}`;
+        // Keep explicit user names while refreshing the generated platform label.
+        const name = channel.name.endsWith(suffix) ? brand.platformName + suffix : channel.name;
+        if (channel.baseUrl === brand.apiOrigin && channel.name === name) return channel;
+        changed = true;
+        return { ...channel, baseUrl: brand.apiOrigin, name };
+    });
+    return changed ? { ...config, channels } : config;
+}
 
 export function hubModelProtocol(model: HubModel) {
     const endpoints = (model.supported_endpoint_types || []).map((value) => value.toLowerCase());
@@ -40,7 +52,7 @@ export function resetHubModels(config: AiConfig, defaults: Partial<AiConfig>): A
 
 // Import is additive: a refresh cannot discard custom models, protocol choices
 // or the user's existing defaults. Unknown contracts require an explicit choice.
-export function importHubModels(config: AiConfig, group: string, models: HubModel[], overrides: Record<string, string>, definitions: ModelProtocolDefinition[]): AiConfig {
+export function importHubModels(config: AiConfig, group: string, models: HubModel[], overrides: Record<string, string>, definitions: ModelProtocolDefinition[], brand: { apiOrigin: string; platformName: string }): AiConfig {
     if (!group || models.length === 0) throw new Error("请选择分组和需要导入的模型");
     const id = "aihubkit-" + group;
     const previous = config.channels.find((channel) => channel.id === id);
@@ -52,9 +64,9 @@ export function importHubModels(config: AiConfig, group: string, models: HubMode
         profiles.set(model.id, { ...profiles.get(model.id), model: model.id, capability: definition.capability, protocol });
     }
     const channel: ModelChannel = {
-        ...previous, id, name: previous?.name || `aihubkit · ${group}`, scope: "user", enabled: true,
+        ...previous, id, name: previous?.name || `${brand.platformName} · ${group}`, scope: "user", enabled: true,
         // Each model owns its protocol; a channel-wide text fallback masks plugin capabilities.
-        pinned: true, apiFormat: "openai", interfaceType: undefined, baseUrl: hubOrigin,
+        pinned: true, apiFormat: "openai", interfaceType: undefined, baseUrl: brand.apiOrigin,
         apiKey: "", secretKey: "", headers: [], hasApiKey: true, credentialRef: "aihubkit:" + group,
         models: [...new Set([...(previous?.models || []), ...models.map((model) => model.id)])],
         modelProfiles: [...profiles.values()],

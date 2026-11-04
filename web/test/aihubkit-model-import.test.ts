@@ -1,6 +1,7 @@
+const brand = { apiOrigin: "https://api.customer.example", platformName: "Customer" };
 import { expect, test } from "bun:test";
 
-import { importedHubModels, importHubModels, resetHubModels } from "../src/integrations/aihubkit/catalog";
+import { importedHubModels, importHubModels, resetHubModels, synchronizeHubModelBrand } from "../src/integrations/aihubkit/catalog";
 import type { ModelProtocolDefinition } from "../src/lib/model-protocols";
 import {
     createModelChannel,
@@ -17,12 +18,27 @@ const definitions: ModelProtocolDefinition[] = [
     { value: "openai-audio", capability: "audio", label: "Audio", create: "POST /v1/audio/speech", contentType: "application/json", media: "" },
 ];
 
+test("brand refresh updates managed destinations and names without altering independent channels", () => {
+    const custom = createModelChannel({ id: "own", baseUrl: "https://own.example", apiKey: "fixture", models: ["own-model"] });
+    const imported = importHubModels({ ...defaultConfig, channels: [custom] }, "group", [{ id: "opaque" }], { opaque: "chat-completion" }, definitions, brand);
+    const next = synchronizeHubModelBrand(imported, { apiOrigin: "https://new-api.example", platformName: "新名称" });
+    expect(next.channels[0]).toBe(imported.channels[0]);
+    expect(next.channels[0]).toEqual(custom);
+    expect(next.channels[1]).toMatchObject({ name: "新名称 · group", baseUrl: "https://new-api.example", credentialRef: "aihubkit:group" });
+    expect(next.textModel).toBe(imported.textModel);
+    expect(synchronizeHubModelBrand(next, { apiOrigin: "https://new-api.example", platformName: "新名称" })).toBe(next);
+    const renamed = { ...imported, channels: imported.channels.map((channel) => ({ ...channel, name: "My group" })) };
+    expect(synchronizeHubModelBrand(renamed, { apiOrigin: "https://new-api.example", platformName: "新名称" }).channels[1]).toMatchObject({
+        name: "My group", baseUrl: "https://new-api.example",
+    });
+});
+
 test.each(["catalog", "manual"] as const)("%s video protocol imports are selectable immediately and after reload", (selection) => {
     const config = normalizeConfigSnapshot({ config: defaultConfig }).config;
     const imported = importHubModels(config, "video", [{
         id: "sd-mini-z",
         supported_endpoint_types: [selection === "catalog" ? "openai-video" : "openai"],
-    }], selection === "manual" ? { "sd-mini-z": "aihubkit-video" } : {}, definitions);
+    }], selection === "manual" ? { "sd-mini-z": "aihubkit-video" } : {}, definitions, brand);
     const value = "aihubkit-video::sd-mini-z";
 
     for (const current of [imported, normalizeConfigSnapshot({ config: JSON.parse(JSON.stringify(imported)) }).config]) {
@@ -40,7 +56,7 @@ test.each(["catalog", "manual"] as const)("%s video protocol imports are selecta
 
 test("initialization removes all imported groups and restores three defaults while keeping independent channels", () => {
     const custom = createModelChannel({ id: "custom", apiKey: "synthetic-key", models: ["chosen"], modelProfiles: [{ model: "chosen", capability: "text", protocol: "openai-response" }] });
-    const old = importHubModels({ ...defaultConfig, channels: [custom], textModel: "custom::chosen" }, "old", [{ id: "old-model" }], { "old-model": "openai-audio" }, definitions);
+    const old = importHubModels({ ...defaultConfig, channels: [custom], textModel: "custom::chosen" }, "old", [{ id: "old-model" }], { "old-model": "openai-audio" }, definitions, brand);
     old.assistantModel = "aihubkit-old::old-model";
     old.mediaReviewModel = "aihubkit-old::old-model";
     const defaults = {
@@ -72,7 +88,7 @@ test("initialization removes all imported groups and restores three defaults whi
 
 test("one imported group exposes each model under its own capability", () => {
     const imported = importHubModels(defaultConfig, "mixed", definitions.map((definition, index) => ({ id: `opaque-${index}` })),
-        Object.fromEntries(definitions.map((definition, index) => [`opaque-${index}`, definition.value])), definitions);
+        Object.fromEntries(definitions.map((definition, index) => [`opaque-${index}`, definition.value])), definitions, brand);
 
     for (const [index, definition] of definitions.entries()) {
         const value = `aihubkit-mixed::opaque-${index}`;
@@ -101,7 +117,7 @@ test("reimport repairs a channel with a text fallback while preserving defaults 
     const imported = importHubModels(config, "video", [
         { id: "opaque", supported_endpoint_types: ["openai"] },
         { id: "added", supported_endpoint_types: ["openai-video"] },
-    ], {}, definitions);
+    ], {}, definitions, brand);
 
     expect(filterModelsByCapability(imported.models, "video", imported.channels)).toEqual([
         "custom::existing", "aihubkit-video::opaque", "aihubkit-video::added",
@@ -125,7 +141,7 @@ test("the account list reads all saved groups and manual imports after reloading
         ],
         textModel: "aihubkit-default-企业版::gpt-5.10", videoModel: "aihubkit-video_官key::sd-mini-z",
     } }).config;
-    config = importHubModels(config, "gpt_image_web", [{ id: "gpt-image-2-w" }], { "gpt-image-2-w": "openai-image" }, definitions);
+    config = importHubModels(config, "gpt_image_web", [{ id: "gpt-image-2-w" }], { "gpt-image-2-w": "openai-image" }, definitions, brand);
     config = normalizeConfigSnapshot({ config: JSON.parse(JSON.stringify(config)) }).config;
     expect(importedHubModels(config)).toEqual([
         { id: "aihubkit-default-企业版::gpt-5.10", model: "gpt-5.10", group: "default-企业版", protocol: "chat-completion", defaults: ["text"] },

@@ -1,3 +1,4 @@
+import { ClientName } from "@/components/brand/product-presentation";
 import { AlertTriangle, CheckCircle2, FolderGit2, Package } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button, Checkbox, Input, Modal, Radio, Tag } from "antd";
@@ -94,10 +95,10 @@ export function PluginInstallConfirmModal({ open, initialRequest, loading = fals
                     <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
                         <div className="flex items-center gap-1.5 font-semibold text-amber-600 dark:text-amber-400">
                             <AlertTriangle className="size-4 shrink-0" />
-                            <span>这是第三方插件，BeefTV 没有审核过它的代码</span>
+                            <span>这是第三方插件，<ClientName /> 没有审核过它的代码</span>
                         </div>
                         <p className="m-0 leading-relaxed text-foreground/85">
-                            安装后，它能读取 BeefTV 里的数据，包括你在本机保存的 API Key，也能调用付费生成，费用从你的账户扣。请只安装你信任的插件。
+                            安装后，它能读取 <ClientName /> 里的数据，包括你在本机保存的 API Key，也能调用付费生成，费用从你的账户扣。请只安装你信任的插件。
                         </p>
                     </div>
 

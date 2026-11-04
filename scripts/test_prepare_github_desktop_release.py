@@ -45,6 +45,20 @@ class ReleaseMetadataTests(unittest.TestCase):
 
 
 class ReleaseAssetTests(unittest.TestCase):
+    def test_every_brand_requires_all_native_installers_and_archives(self):
+        brands = [{'artifactName': 'CustomerTV', 'appName': 'CustomerTV', 'origin': 'https://customer.example'},
+                  {'artifactName': '客户TV', 'appName': '客户TV', 'origin': 'https://second.example'}]
+        for suffix in ASSETS[:8]:
+            (self.directory / f'BeefTV-{APP_VERSION}-{suffix}').unlink()
+            for brand in brands:
+                (self.directory / f"{brand['artifactName']}-{APP_VERSION}-{suffix}").write_bytes(b'fixture')
+        release.prepare_assets(self.directory, TAG, brands)
+        self.assertEqual(len((self.directory / 'SHA256SUMS.txt').read_text().splitlines()), 19)
+        missing = self.directory / f'客户TV-{APP_VERSION}-windows-amd64.zip'
+        missing.unlink()
+        with self.assertRaisesRegex(ValueError, 'Missing'):
+            release.prepare_assets(self.directory, TAG, brands)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

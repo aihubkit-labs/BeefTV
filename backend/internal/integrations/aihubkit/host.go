@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"infinite-canvas/backend/internal/bootstrap"
 	"infinite-canvas/backend/internal/depthcapture"
+	"infinite-canvas/backend/internal/integrations/aihubkit/branding"
 	"infinite-canvas/backend/internal/runtimeinfo"
 	httptransport "infinite-canvas/backend/internal/transport/http"
 )
@@ -33,6 +34,7 @@ type Host struct {
 	mu          sync.RWMutex
 	cfg         bootstrap.Config
 	client      *client
+	brand       *branding.Service
 	active      *bootstrap.Runtime
 	account     *account
 	session     string
@@ -73,7 +75,17 @@ func Open(_ context.Context, cfg bootstrap.Config) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Host{cfg: cfg, client: newClient(), errors: make(chan error, 1), lock: lock}
+	brand, err := branding.Embedded()
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	h := &Host{cfg: cfg, client: newClient(), brand: branding.New(brand), errors: make(chan error, 1), lock: lock}
+	if brand.ID != "" {
+		h.client.origin = brand.APIOrigin
+		h.client.platformName = brand.PlatformName
+		h.client.brand = h.brand
+	}
 	if cfg.Profile == bootstrap.ProfileDesktop {
 		h.launchToken = cfg.LaunchToken
 		if h.launchToken == "" {
@@ -166,7 +178,7 @@ func (h *Host) sessionData() map[string]any {
 	if h.active == nil {
 		return map[string]any{"enabled": true, "authenticated": false, "rememberLoginAvailable": h.cfg.Profile == bootstrap.ProfileDesktop}
 	}
-	return map[string]any{"enabled": true, "authenticated": true, "uploadToAIHubkit": h.account.uploadToAIHubkit.Load(), "session": h.session, "scope": "aihubkit-" + accountScope(h.client.origin, h.account.user.ID), "user": h.account.user, "groups": h.account.groups, "modelImportWarnings": h.account.modelImportWarnings}
+	return map[string]any{"enabled": true, "authenticated": true, "uploadToAIHubkit": h.account.uploadToAIHubkit.Load(), "session": h.session, "scope": "aihubkit-" + accountScope(h.client.accountOrigin(), h.account.user.ID), "user": h.account.user, "groups": h.account.groups, "modelImportWarnings": h.account.modelImportWarnings}
 }
 
 func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +191,14 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, apiPrefix)
+	if r.URL.Path == apiPrefix+"brand" && r.Method == "GET" {
+		brand := h.brand.Current()
+		if r.URL.Query().Get("refresh") == "1" {
+			brand, _ = h.brand.Refresh(r.Context())
+		}
+		reply(w, 200, brand, "", "")
+		return
+	}
 	if r.URL.Path == apiPrefix+"login-form" {
 		h.loginFormAction(w, r)
 		return

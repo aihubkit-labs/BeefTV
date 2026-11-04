@@ -69,7 +69,7 @@ func (a *account) ensureKey(ctx context.Context, group string) error {
 	var created struct {
 		Key string `json:"key"`
 	}
-	if err := a.client.call(ctx, "POST", "/api/token/", map[string]any{"name": "BeefTV " + group, "group": group, "unlimited_quota": true}, a.token, a.user.ID, &created); err != nil {
+	if err := a.client.call(ctx, "POST", "/api/token/", map[string]any{"name": a.client.displayName() + "TV " + group, "group": group, "unlimited_quota": true}, a.token, a.user.ID, &created); err != nil {
 		return err
 	}
 	if created.Key == "" {
@@ -129,7 +129,7 @@ func (a *account) resolve(ref string) (string, string, bool, error) {
 	if _, ok := a.groups[group]; !ok || key == "" {
 		return "", "", true, errors.New("aihubkit 分组凭据不可用，请重新登录或同步该分组")
 	}
-	return a.client.origin, key, true, nil
+	return a.client.upstreamOrigin(), key, true, nil
 }
 
 func (a *account) configure(s *app.Service) error {

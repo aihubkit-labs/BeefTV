@@ -2,6 +2,7 @@
 """Validate a tag release and its complete desktop download inventory."""
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
 
@@ -16,7 +17,7 @@ TARGETS = {
 }
 
 
-def release_notes(tag, version, changelog):
+def release_notes(tag, version, changelog, brands=None):
     if not re.fullmatch(r'aihubkit-v[0-9]+\.[0-9]+\.[0-9]+', tag):
         raise ValueError('Desktop installers require an independent tag: aihubkit-vMAJOR.MINOR.PATCH')
     app_version = tag.removeprefix('aihubkit-')
@@ -34,7 +35,7 @@ def release_notes(tag, version, changelog):
     changes = '\n'.join(body).strip()
     if not changes:
         raise ValueError(f'AIHUBKIT_CHANGELOG.md has no release notes for {tag}')
-    return f'''{changes}
+    notes = f'''{changes}
 
 ## 下载与安装
 
@@ -55,12 +56,21 @@ Windows 未做 Authenticode 签名；macOS 使用 ad hoc 签名，未做 Apple �
 
 `SHA256SUMS.txt` 包含所有下载文件的 SHA-256。媒体组件的对应源码包一并提供。
 '''
+    if brands:
+        start, end = notes.index('| 系统 |'), notes.index('ZIP 用于')
+        rows = ['| 品牌 | 绑定域名 | 平台 | 安装包 |', '| --- | --- | --- | --- |']
+        for brand in brands:
+            for target, suffix in TARGETS.items():
+                rows.append(f"| {brand['appName']} | {brand['origin']} | {target} | `{brand['artifactName']}-{app_version}-{target}{suffix}` |")
+        notes = notes[:start] + '\n'.join(rows) + '\n\nWindows 运行 Setup；macOS 将应用拖入 Applications；Ubuntu 使用 `sudo apt install ./下载的文件.deb`。\n' + notes[end:]
+    return notes
 
 
-def prepare_assets(directory, tag):
+def prepare_assets(directory, tag, brands=None):
     app_version = tag.removeprefix('aihubkit-')
-    expected = {f'BeefTV-{app_version}-{target}{suffix}' for target, suffix in TARGETS.items()}
-    expected |= {f'BeefTV-{app_version}-{target}.zip' for target in TARGETS}
+    names = [brand['artifactName'] for brand in brands] if brands else ['BeefTV']
+    expected = {f'{name}-{app_version}-{target}{suffix}' for name in names for target, suffix in TARGETS.items()}
+    expected |= {f'{name}-{app_version}-{target}.zip' for name in names for target in TARGETS}
     expected |= {f'BeefTV-{app_version}-ffprobe-{target}-sources.tar.gz'
                  for target in TARGETS if target.startswith('darwin-')}
     expected.add(f'BeefTV-{app_version}-ffmpeg-wasm-sources.tar.gz')
@@ -84,11 +94,22 @@ def main():
     parser.add_argument('--tag', required=True)
     parser.add_argument('--notes', required=True, type=Path)
     parser.add_argument('--assets-dir', type=Path)
+    parser.add_argument('--brands', type=Path)
     args = parser.parse_args()
+    brands = None
+    if args.brands:
+        from aihubkit.brands import registry
+        brands = json.loads(args.brands.read_text(encoding='utf-8'))['brands']
+        if {(b['id'], b['origin']) for b in brands} != {(b['id'], b['origin']) for b in registry()} or len(brands) != len(registry()):
+            raise ValueError('Release snapshot must contain every operational brand exactly once')
+        if len({b['artifactName'].casefold() for b in brands}) != len(brands):
+            raise ValueError('Duplicate brand artifact names')
     notes = release_notes(args.tag, VERSION_FILE.read_text(),
-                          CHANGELOG_FILE.read_text(encoding='utf-8'))
+                          CHANGELOG_FILE.read_text(encoding='utf-8'), brands)
     if args.assets_dir:
-        prepare_assets(args.assets_dir, args.tag)
+        if not brands:
+            raise ValueError('A formal release requires the frozen operational brand inventory')
+        prepare_assets(args.assets_dir, args.tag, brands)
     args.notes.write_text(notes, encoding='utf-8')
 
 

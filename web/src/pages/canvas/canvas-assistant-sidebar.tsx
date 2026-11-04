@@ -1,3 +1,4 @@
+import { useClientName } from "@/components/brand/product-presentation";
 import { createClientId } from "@/lib/client-id";
 import { Button, Dropdown, Tooltip } from "antd";
 import { History, MessageSquarePlus, X, ArrowUpRight } from "lucide-react";
@@ -54,6 +55,7 @@ export function CanvasAssistantPlan({ plan }: { plan: AssistantPlan | null | und
 }
 
 export function CanvasAssistantSidebar(props: Props) {
+    const brandName = useClientName();
     const { assistant, dockable, readOnly, selectedNodeIds, references, onLocateNodes, onRunProposal, onOpenModelSettings } = props;
     const [draft, setDraft] = useState("");
     const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
@@ -211,7 +213,7 @@ export function CanvasAssistantSidebar(props: Props) {
         <div className="canvas-assistant-panel" data-canvas-no-zoom>
             <header className="canvas-assistant-header">
                 <div className="canvas-assistant-heading">
-                    <h2>BeefTV Agent</h2>
+                    <h2>{brandName} Agent</h2>
                     {assistant.streaming ? (
                         <span className="canvas-assistant-live-badge" aria-hidden="true">
                             <span className="canvas-assistant-live-dot" />
@@ -425,7 +427,7 @@ export function CanvasAssistantSidebar(props: Props) {
                 closable={false}
                 onClose={() => assistant.setOpen(false)}
                 size="min(380px, 92vw)"
-                aria-label="BeefTV Agent"
+                aria-label={`${brandName} Agent`}
             >
                 {content}
             </AppDrawer>
@@ -433,7 +435,7 @@ export function CanvasAssistantSidebar(props: Props) {
     }
 
     return (
-        <aside ref={sidebarRef} className="canvas-assistant-sidebar" aria-label="BeefTV Agent" style={{ width: assistant.width, flexBasis: assistant.width }}>
+        <aside ref={sidebarRef} className="canvas-assistant-sidebar" aria-label={`${brandName} Agent`} style={{ width: assistant.width, flexBasis: assistant.width }}>
             <button
                 type="button"
                 className="canvas-assistant-resize"

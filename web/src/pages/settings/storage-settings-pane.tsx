@@ -1,3 +1,4 @@
+import { useAppearanceStore } from "@/stores/use-appearance-store";
 import { useEffect, useState } from "react";
 import { App, Button, Input } from "antd";
 import { FolderOpen } from "lucide-react";
@@ -17,6 +18,7 @@ import { createTransferSampler } from "@/lib/operation-progress";
 const size = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 
 export function StorageSettingsPane() {
+    const brandName = useAppearanceStore((state) => state.appearance.brandName);
     const { message, modal } = App.useApp();
     const binding = getDesktopAppBinding();
     const hasNativeStorage = Boolean(binding?.StorageSettings && binding.MigrateStorage);
@@ -210,7 +212,7 @@ export function StorageSettingsPane() {
                     <label className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="shrink-0 text-sm">新存储目录：</span>
                         <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-                            <Input className="min-w-0 flex-1" aria-label="新存储目录" value={target} onChange={(event) => setTarget(event.target.value)} placeholder="例如 D:\BeefTV" disabled={busy} />
+                            <Input className="min-w-0 flex-1" aria-label="新存储目录" value={target} onChange={(event) => setTarget(event.target.value)} placeholder={`例如 D:\\${brandName}`} disabled={busy} />
                             <Button icon={<FolderOpen className="size-4" />} onClick={choose} disabled={busy}>
                                 选择文件夹
                             </Button>

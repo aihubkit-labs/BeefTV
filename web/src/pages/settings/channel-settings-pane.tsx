@@ -25,6 +25,7 @@ import { createChannelCatalogRequests } from "@/services/channel-catalog-request
 import { getTransportFailureKind } from "@/services/api/request";
 import { beefAPIConnectionLabel, cancelBeefAPIConnection, disconnectBeefAPIConnection, getBeefAPIConnection, openBeefAPIWallet, startBeefAPIConnection, type BeefAPIConnectionSummary } from "@/services/api/beefapi-connection";
 import { recordChannelDelete, recordChannelDeleteConfirmOpen } from "./model-settings-diagnostics";
+import { useProductPresentation } from "@/components/brand/product-presentation";
 
 type UserChannelConnection = "openai" | "gemini";
 type ChannelSettingsPaneProps = {
@@ -34,6 +35,7 @@ type ChannelSettingsPaneProps = {
 };
 
 export function ChannelSettingsPane({ onOpenDiagnostics, onOpenModels, onOpenRunningHub }: ChannelSettingsPaneProps) {
+    const { hideBuiltinChannel } = useProductPresentation();
     const { message } = App.useApp();
     const config = useConfigStore((state) => state.config);
     const replaceConfig = useConfigStore((state) => state.replaceConfig);
@@ -85,6 +87,7 @@ export function ChannelSettingsPane({ onOpenDiagnostics, onOpenModels, onOpenRun
     };
 
     useEffect(() => {
+        if (hideBuiltinChannel) return;
         let cancelled = false;
         void getBeefAPIConnection()
             .then((summary) => {
@@ -94,7 +97,7 @@ export function ChannelSettingsPane({ onOpenDiagnostics, onOpenModels, onOpenRun
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [hideBuiltinChannel]);
 
     useEffect(() => {
         if (beefConnection?.state !== "pending" && beefConnection?.state !== "connecting") return;
@@ -136,7 +139,7 @@ export function ChannelSettingsPane({ onOpenDiagnostics, onOpenModels, onOpenRun
         }
         return beginBeefConnection();
     };
-    const userChannels = config.channels.filter((channel) => channel.scope !== "system");
+    const userChannels = config.channels.filter((channel) => channel.scope !== "system" && !(hideBuiltinChannel && isBuiltinBeefAPIChannel(channel)));
     const runningHubReady = Boolean(config.runningHub.enabled && config.runningHub.baseUrl.trim() && config.runningHub.apiKey.trim() && config.runningHub.workflowId.trim());
 
     const updateChannels = (channels: ModelChannel[], baseConfig = config) => {
