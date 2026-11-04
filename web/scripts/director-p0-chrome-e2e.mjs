@@ -105,6 +105,11 @@ async function launchVite(port, apiTarget) {
 async function launchApiFixture() {
     const server = createHttpServer((request, response) => {
         const url = new URL(request.url || "/", "http://127.0.0.1");
+        if (request.method === "GET" && url.pathname === "/api/integrations/aihubkit/session") {
+            response.writeHead(200, { "Content-Type": "application/json" });
+            response.end(JSON.stringify({ code: 0, data: { enabled: false, authenticated: false } }));
+            return;
+        }
         if (request.method === "GET" && url.pathname === "/api/canvas-projects") {
             response.writeHead(200, { "Content-Type": "application/json" });
             response.end(JSON.stringify({ code: 0, data: { items: [], total: 0 } }));
