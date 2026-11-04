@@ -3,12 +3,14 @@ package aihubkit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/outbound"
 )
 
@@ -29,8 +31,10 @@ func (c *client) upload(ctx context.Context, token, filename, contentType string
 	}
 	issued := time.Now()
 	var ticket uploadTicket
-	if err := c.call(ctx, "POST", "/v1/temporary-files", map[string]any{"filename": filepath.Base(filename), "content_type": contentType, "size": size}, token, 0, &ticket); err != nil {
-		return "", time.Time{}, err
+	if err := c.requestUploadTicket(ctx, token, filename, contentType, size, &ticket); err != nil {
+		meta, _ := generation.ReferenceUploadFromContext(ctx)
+		meta.Stage = "create"
+		return "", time.Time{}, &generation.ReferenceUploadError{Meta: meta, Cause: err, Detail: err.Error()}
 	}
 	if ticket.ExpiresIn <= 0 || ticket.ExpiresIn > int64((1<<63-1)/time.Second) {
 		return "", time.Time{}, errors.New("临时文件有效期无效")
@@ -79,4 +83,30 @@ func (c *client) upload(ctx context.Context, token, filename, contentType string
 		return "", time.Time{}, errors.New("文件访问链接即将过期，请重试")
 	}
 	return ticket.URL, deadline, nil
+}
+
+func (c *client) requestUploadTicket(ctx context.Context, token, filename, contentType string, size int64, ticket *uploadTicket) error {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	payload := map[string]any{"filename": filepath.Base(filename), "content_type": contentType, "size": size}
+	// This endpoint only signs temporary PUT/GET URLs: it neither uploads bytes
+	// nor creates a generation job. A lost response is safe to request again.
+	for attempt := 0; attempt < 3; attempt++ {
+		err := c.call(ctx, "POST", "/v1/temporary-files", payload, token, 0, ticket)
+		var connection *hubConnectionError
+		if err == nil || !errors.As(err, &connection) || !connection.retryable {
+			return err
+		}
+		if attempt == 2 {
+			return fmt.Errorf("申请 aihubkit 临时上传地址失败，已尝试 3 次：%w", err)
+		}
+		wait := time.NewTimer(time.Duration(attempt+1) * 300 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			wait.Stop()
+			return ctx.Err()
+		case <-wait.C:
+		}
+	}
+	return nil
 }

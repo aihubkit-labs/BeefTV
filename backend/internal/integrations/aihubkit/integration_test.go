@@ -16,6 +16,7 @@ import (
 
 	"infinite-canvas/backend/internal/bootstrap"
 	"infinite-canvas/backend/internal/generation"
+	"infinite-canvas/backend/internal/workspace"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -129,7 +130,7 @@ func TestUploadRejectsPrivateTargetsAndExpiredBatches(t *testing.T) {
 	if _, _, err := c.upload(context.Background(), "secret", "file", "video/mp4", 1, strings.NewReader("a")); err == nil {
 		t.Fatal("accepted private upload target")
 	}
-	s := &accountStorage{expiresAt: time.Now().Add(5 * time.Second)}
+	s := &accountStorage{account: &account{}, expiresAt: time.Now().Add(5 * time.Second)}
 	if s.ValidateReferences(context.Background()) == nil {
 		t.Fatal("accepted an expiring earlier reference")
 	}
@@ -139,24 +140,18 @@ func TestUploadRejectsPrivateTargetsAndExpiredBatches(t *testing.T) {
 	}
 }
 
-func TestAccountReferenceStorageSupportsExistingHubChannelsOnly(t *testing.T) {
+func TestAccountReferenceStorageSelectionOnlyDependsOnUploadPreference(t *testing.T) {
 	a := &account{client: &client{origin: Origin}}
-	for _, config := range []generation.Config{
-		{BaseURL: Origin + "/v1"},
-		{CredentialRef: credentialPrefix + "video", BaseURL: "https://other.example/v1"},
-	} {
-		if a.referenceStorage(config) == nil {
-			t.Fatalf("expected account storage for %+v", config)
-		}
-	}
-	for _, baseURL := range []string{
-		"https://apimodel.aihubkit.com.evil.example/v1",
-		"https://apimodel.aihubkit.com@evil.example/v1",
-		"http://apimodel.aihubkit.com/v1",
-		"https://other.example/v1",
-	} {
-		if a.referenceStorage(generation.Config{BaseURL: baseURL}) != nil {
-			t.Fatalf("unexpected account storage for %q", baseURL)
+	for _, enabled := range []bool{true, false} {
+		a.uploadToAIHubkit.Store(enabled)
+		for _, config := range []generation.Config{
+			{BaseURL: Origin + "/v1"},
+			{CredentialRef: credentialPrefix + "video"},
+			{BaseURL: "https://other.example/v1"},
+		} {
+			if (a.referenceStorage(config) != nil) != enabled {
+				t.Fatalf("storage selection ignored preference=%v for %+v", enabled, config)
+			}
 		}
 	}
 }
@@ -188,24 +183,13 @@ func TestHostRequiresLoginAndRejectsForeignOrigins(t *testing.T) {
 	}
 }
 
-func TestProtocolMappingRequiresExplicitContract(t *testing.T) {
-	for _, tc := range []struct {
-		endpoints            []string
-		capability, protocol string
-	}{
-		{[]string{"openai-video"}, "video", "aihubkit-video"},
-		{[]string{"openai", "image-generation"}, "image", "openai-image"},
-		{[]string{"openai"}, "text", "chat-completion"},
-		{nil, "", ""},
-	} {
-		capability, protocol := modelProtocol(CatalogModel{ID: "opaque-model", Endpoints: tc.endpoints})
-		if capability != tc.capability || protocol != tc.protocol {
-			t.Fatalf("unexpected mapping: %s %s", capability, protocol)
-		}
+func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing.T) {
+	for _, profile := range []bootstrap.Profile{bootstrap.ProfileServer, bootstrap.ProfileDesktop} {
+		t.Run(string(profile), func(t *testing.T) { testAccountWorkspace(t, profile) })
 	}
 }
 
-func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing.T) {
+func testAccountWorkspace(t *testing.T, profile bootstrap.Profile) {
 	var created atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -228,7 +212,7 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 			}
 			io.WriteString(w, `{"success":true,"data":"management-secret"}`)
 		case "/api/user/self/groups":
-			io.WriteString(w, `{"success":true,"data":{"video":{"desc":"Video","ratio":1}}}`)
+			io.WriteString(w, `{"success":true,"data":{"video_官key":{"desc":"Video","ratio":1}}}`)
 		case "/api/token/":
 			created.Add(1)
 			io.WriteString(w, `{"success":true,"data":{"key":"inference-secret"}}`)
@@ -240,11 +224,20 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 		}
 	}))
 	defer server.Close()
-	h, err := Open(context.Background(), bootstrap.Config{Profile: bootstrap.ProfileServer, DataDir: t.TempDir(), AutoMigrate: true, ShutdownTimeout: 5 * time.Second})
+	h, err := Open(context.Background(), bootstrap.Config{Profile: profile, DataDir: t.TempDir(), AutoMigrate: true, ShutdownTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.client = &client{origin: server.URL, http: server.Client()}
+	// Reproduce an account that saved settings before default-model onboarding
+	// existed. Login must repair it before the official runtime reads its config.
+	store, err := workspace.NewProviderConfig(filepath.Join(h.cfg.DataDir, "aihubkit", "accounts", accountScope(server.URL, 7)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SaveLocalModelConfig([]byte(`{"channels":[]}`)); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if err := h.Close(context.Background()); err != nil {
 			t.Error(err)
@@ -252,9 +245,15 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 	})
 	request := func(method, path, body, session, cookie string, status int) *httptest.ResponseRecorder {
 		t.Helper()
-		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r := httptest.NewRequest(method, "http://127.0.0.1:54321"+path, strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:12345"
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("X-Aihubkit-Client", "1")
+		if profile == bootstrap.ProfileDesktop {
+			r.Header.Set("Origin", "wails://wails")
+			r.Header.Set("X-Desktop-Token", h.LaunchToken())
+			r.Header.Set("X-Beeftv-UI-Bootstrap", h.UIBootstrapToken())
+		}
 		r.Header.Set(sessionHeader, session)
 		if cookie != "" {
 			r.AddCookie(&http.Cookie{Name: cookieName, Value: cookie})
@@ -271,7 +270,11 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 	}
 	login := func(username string) string {
 		t.Helper()
-		w := request("POST", apiPrefix+"login", `{"username":"`+username+`","password":"password"}`, "", "", 200)
+		body, _ := json.Marshal(map[string]any{"username": username, "password": "password", "rememberCredentials": profile == bootstrap.ProfileDesktop && username == "first"})
+		w := request("POST", apiPrefix+"login", string(body), "", "", 200)
+		if strings.Contains(w.Body.String(), `"password"`) {
+			t.Fatal("login session exposed the password")
+		}
 		var envelope struct {
 			Data struct {
 				Session string `json:"session"`
@@ -284,7 +287,59 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 		return envelope.Data.Session
 	}
 	first := login("first")
+	if profile == bootstrap.ProfileDesktop {
+		request("POST", apiPrefix+"login-form", `{}`, "", "", 409)
+	}
+	if !strings.Contains(request("GET", apiPrefix+"session", "", first, "", 200).Body.String(), `"uploadToAIHubkit":true`) {
+		t.Fatal("login did not default to platform uploads")
+	}
+	request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":false}`, first, "", 200)
 	request("GET", "/api/workspace/bootstrap", "", first, "", 200)
+	modelConfig := request("GET", "/api/workspace/model-config", "", first, "", 200)
+	var seeded struct {
+		Data struct {
+			Config struct {
+				VideoModel string `json:"videoModel"`
+				Channels   []struct {
+					ID            string `json:"id"`
+					InterfaceType string `json:"interfaceType"`
+					Profiles      []struct {
+						Model      string `json:"model"`
+						Capability string `json:"capability"`
+						Protocol   string `json:"protocol"`
+					} `json:"modelProfiles"`
+				} `json:"channels"`
+			} `json:"config"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(modelConfig.Body.Bytes(), &seeded); err != nil {
+		t.Fatal(err)
+	}
+	if seeded.Data.Config.VideoModel != "aihubkit-video_官key::test-video" {
+		t.Fatal("default group video model was not selected")
+	}
+	found := false
+	for _, channel := range seeded.Data.Config.Channels {
+		if channel.ID != "aihubkit-video_官key" {
+			continue
+		}
+		found = true
+		if channel.InterfaceType != "" || len(channel.Profiles) != 1 || channel.Profiles[0].Model != "test-video" || channel.Profiles[0].Capability != "video" || channel.Profiles[0].Protocol != "aihubkit-video" {
+			t.Fatal("default group must use model protocols without a channel-wide fallback")
+		}
+	}
+	if !found {
+		t.Fatal("default group channel is missing")
+	}
+	request("POST", apiPrefix+"default-model-config", `{}`, "", first, 409)
+	reset := request("POST", apiPrefix+"default-model-config", `{}`, first, "", 200)
+	if !strings.Contains(reset.Body.String(), `"videoModel":"aihubkit-video_官key::test-video"`) || !strings.Contains(reset.Body.String(), `"warnings":[`) {
+		t.Fatal("manual initialization did not use the onboarding model rules")
+	}
+	unchanged := request("GET", "/api/workspace/model-config", "", first, "", 200)
+	if unchanged.Body.String() != modelConfig.Body.String() {
+		t.Fatal("preparing default models changed saved configuration before UI commit")
+	}
 	w := request("POST", "/api/projects", `{"name":"first account project"}`, first, "", 200)
 	var project struct {
 		Data struct {
@@ -298,11 +353,26 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 	request("POST", "/api/projects", `{"name":"cookie only write"}`, "", first, 409)
 	request("POST", apiPrefix+"logout", `{}`, first, "", 200)
 	request("GET", "/api/projects/"+id, "", first, "", 401)
+	if profile == bootstrap.ProfileDesktop {
+		autofill := request("POST", apiPrefix+"login-form", `{}`, "", "", 200)
+		if !strings.Contains(autofill.Body.String(), `"username":"first"`) || !strings.Contains(autofill.Body.String(), `"password":"password"`) || h.Ready() {
+			t.Fatal("autofill did not retain the form or opened a workspace without login")
+		}
+	}
 	second := login("second")
+	if !h.account.uploadToAIHubkit.Load() {
+		t.Fatal("another account inherited the first account's upload preference")
+	}
 	request("GET", "/api/projects/"+id, "", second, "", 404)
 	request("POST", "/api/projects", `{"name":"stale tab"}`, first, second, 401)
 	request("POST", apiPrefix+"logout", `{}`, second, "", 200)
+	if profile == bootstrap.ProfileDesktop && !strings.Contains(request("POST", apiPrefix+"login-form", `{}`, "", "", 200).Body.String(), `"data":null`) {
+		t.Fatal("login without remembering retained an earlier password")
+	}
 	again := login("first")
+	if !strings.Contains(request("GET", apiPrefix+"session", "", again, "", 200).Body.String(), `"uploadToAIHubkit":false`) {
+		t.Fatal("relogin lost the saved upload preference")
+	}
 	if first == again {
 		t.Fatal("logout did not rotate the local session")
 	}
@@ -310,4 +380,100 @@ func TestAccountWorkspaceSurvivesLogoutAndIsIsolatedFromOtherAccounts(t *testing
 	if created.Load() != 2 {
 		t.Fatal("relogin recreated persisted group credentials")
 	}
+	accountDir := h.account.dir
+	activeRuntime, launchToken, uiToken := h.active, h.LaunchToken(), h.UIBootstrapToken()
+	commitCanvas := func(revision int) {
+		t.Helper()
+		if profile != bootstrap.ProfileDesktop {
+			return
+		}
+		body := `{"opId":"binding-save-` + strconv.Itoa(revision) + `","params":{"canvasId":"binding-canvas","expectedRevision":` + strconv.Itoa(revision) + `,"document":{"title":"binding save","nodes":[{"id":"image","type":"image"},{"id":"video","type":"video"}],"connections":[]}}}`
+		request("POST", "/api/ops/canvas.document.commit", body, again, "", 200)
+		saved := request("GET", "/api/canvas-projects/binding-canvas", "", again, "", 200)
+		if !strings.Contains(saved.Body.String(), `"revision":`+strconv.Itoa(revision+1)) || !strings.Contains(saved.Body.String(), `"id":"image"`) || !strings.Contains(saved.Body.String(), `"id":"video"`) {
+			t.Fatal("canvas document was not persisted")
+		}
+	}
+	if profile == bootstrap.ProfileDesktop {
+		request("PUT", "/api/canvas-projects/binding-canvas", `{"project":{"id":"binding-canvas","title":"binding save","revision":0,"nodes":[],"connections":[]}}`, again, "", 200)
+		commitCanvas(1)
+	}
+	beforeConfig := request("GET", "/api/workspace/model-config", "", again, "", 200).Body.String()
+	request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":true}`, again, "", 200)
+	request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":false}`, "", again, 409)
+	for _, body := range []string{`{}`, `{"uploadToAIHubkit":null}`, `{"uploadToAIHubkit":"false"}`} {
+		request("POST", apiPrefix+"upload-preference", body, again, "", 400)
+	}
+	request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":false}`, "invalid", "", 401)
+	if !h.account.uploadToAIHubkit.Load() {
+		t.Fatal("rejected request changed upload preference")
+	}
+	request("GET", "/api/projects/"+id, "", again, "", 200)
+	updated := request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":false}`, again, "", 200)
+	if !strings.Contains(updated.Body.String(), `"uploadToAIHubkit":false`) || !strings.Contains(updated.Body.String(), `"authenticated":true`) {
+		t.Fatal("upload preference must not change login state")
+	}
+	if !strings.Contains(request("GET", apiPrefix+"session", "", again, "", 200).Body.String(), `"uploadToAIHubkit":false`) {
+		t.Fatal("refresh lost the upload preference")
+	}
+	if h.active != activeRuntime || h.session != again || h.LaunchToken() != launchToken || h.UIBootstrapToken() != uiToken {
+		t.Fatal("upload preference changed the workspace or desktop authorization")
+	}
+	commitCanvas(2)
+	request("GET", "/api/projects/"+id, "", again, "", 200)
+	request("POST", apiPrefix+"catalog", `{"group":"video_官key"}`, again, "", 200)
+	request("POST", apiPrefix+"default-model-config", `{}`, again, "", 200)
+	if _, key, handled, err := h.account.resolve("aihubkit:video_官key"); err != nil || key == "" || !handled {
+		t.Fatal("upload preference changed imported model credentials")
+	}
+	localProject := request("POST", "/api/projects", `{"name":"project with native storage"}`, again, "", 200)
+	if err := json.Unmarshal(localProject.Body.Bytes(), &project); err != nil {
+		t.Fatal(err)
+	}
+	localID := project.Data.Project.ID
+	if request("GET", "/api/workspace/model-config", "", again, "", 200).Body.String() != beforeConfig {
+		t.Fatal("upload preference rewrote model configuration")
+	}
+	_, localDir, release, err := h.AcquireWorkspace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if localDir != accountDir {
+		t.Fatal("upload preference changed the native workspace")
+	}
+	updated = request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":true}`, again, "", 200)
+	if !strings.Contains(updated.Body.String(), `"uploadToAIHubkit":true`) {
+		t.Fatal("enabling platform uploads did not take effect")
+	}
+	commitCanvas(3)
+	if _, key, _, err := h.account.resolve("aihubkit:video_官key"); err != nil || key == "" {
+		t.Fatal("enabling platform uploads changed credentials")
+	}
+	request("GET", "/api/projects/"+id, "", again, "", 200)
+	request("GET", "/api/projects/"+localID, "", again, "", 200)
+	request("POST", apiPrefix+"upload-preference", `{"uploadToAIHubkit":false}`, again, "", 200)
+	cfg := h.cfg
+	if err := h.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h, err = Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.client = &client{origin: server.URL, http: server.Client()}
+	request("GET", "/api/projects/"+localID, "", "", "", 401)
+	if profile == bootstrap.ProfileDesktop {
+		autofill := request("POST", apiPrefix+"login-form", `{}`, "", "", 200)
+		if !strings.Contains(autofill.Body.String(), `"password":"password"`) || h.Ready() {
+			t.Fatal("restart must restore the form without authenticating")
+		}
+	}
+	restarted := login("first")
+	state := request("GET", apiPrefix+"session", "", restarted, "", 200)
+	if !strings.Contains(state.Body.String(), `"uploadToAIHubkit":false`) {
+		t.Fatal("restart lost the saved upload preference")
+	}
+	request("GET", "/api/projects/"+localID, "", restarted, "", 200)
+	request("GET", "/api/projects/"+id, "", restarted, "", 200)
 }

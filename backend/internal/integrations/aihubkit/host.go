@@ -164,9 +164,9 @@ func (h *Host) authenticated(r *http.Request) bool {
 }
 func (h *Host) sessionData() map[string]any {
 	if h.active == nil {
-		return map[string]any{"enabled": true, "authenticated": false}
+		return map[string]any{"enabled": true, "authenticated": false, "rememberLoginAvailable": h.cfg.Profile == bootstrap.ProfileDesktop}
 	}
-	return map[string]any{"enabled": true, "authenticated": true, "session": h.session, "scope": "aihubkit-" + accountScope(h.client.origin, h.account.user.ID), "user": h.account.user, "groups": h.account.groups}
+	return map[string]any{"enabled": true, "authenticated": true, "uploadToAIHubkit": h.account.uploadToAIHubkit.Load(), "session": h.session, "scope": "aihubkit-" + accountScope(h.client.origin, h.account.user.ID), "user": h.account.user, "groups": h.account.groups, "modelImportWarnings": h.account.modelImportWarnings}
 }
 
 func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +179,10 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, apiPrefix)
+	if r.URL.Path == apiPrefix+"login-form" {
+		h.loginFormAction(w, r)
+		return
+	}
 	if r.URL.Path == apiPrefix+"session" && r.Method == "GET" {
 		h.mu.RLock()
 		defer h.mu.RUnlock()
