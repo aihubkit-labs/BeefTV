@@ -7,9 +7,11 @@ import { commitModelConfig, flushModelConfig, getModelConfigPersistenceState } f
 import { useConfigStore } from "@/stores/use-config-store";
 import { hub, type HubModel } from "./api";
 import { hubModelProtocol, importedHubModels, importHubModels, resetHubModels } from "./catalog";
+import { useHubBrand } from "./brand";
 import { useHubSession } from "./gate";
 
 export function HubAccountModels() {
+    const brand = useHubBrand();
     const session = useHubSession();
     const config = useConfigStore((state) => state.config);
     const { message } = App.useApp();
@@ -46,7 +48,7 @@ export function HubAccountModels() {
                     if (!result.warnings.length) void message.success("文本、图片、视频默认模型已初始化");
                 })}>初始化默认模型配置</Button>
             </div>
-            <p className="text-sm text-foreground/60">初始化会清除通过 aihubkit 账号导入的全部模型，并重新配置默认文本、图片和视频模型。独立配置的其他渠道保留。</p>
+            <p className="text-sm text-foreground/60">初始化会清除通过 {brand.platformName} 账号导入的全部模型，并重新配置默认文本、图片和视频模型。独立配置的其他渠道保留。</p>
             <Table size="small" rowKey="id" dataSource={imported} pagination={{ pageSize: 10 }} scroll={{ x: 600 }} columns={[
                 { title: "模型", dataIndex: "model" },
                 { title: "分组", dataIndex: "group", render: (value: string) => <span title={session.groups?.[value]?.desc}>{value}</span> },
@@ -74,7 +76,7 @@ export function HubAccountModels() {
                     setSelected(catalog.filter((model) => saved[model.id] || hubModelProtocol(model)).map((model) => model.id));
                 })}>获取模型</Button>
                 <Button type="primary" disabled={busy || selected.length === 0 || !protocols.data} onClick={() => void action(async () => {
-                    const next = importHubModels(useConfigStore.getState().config, group, models.filter((model) => selected.includes(model.id)), overrides, protocols.data || []);
+                    const next = importHubModels(useConfigStore.getState().config, group, models.filter((model) => selected.includes(model.id)), overrides, protocols.data || [], brand);
                     useConfigStore.getState().replaceConfig(next);
                     await commitModelConfig(next);
                     if (getModelConfigPersistenceState().dirty) throw new Error(getModelConfigPersistenceState().error || "模型配置未保存，请重试");

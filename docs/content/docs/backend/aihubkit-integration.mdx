@@ -5,6 +5,26 @@ description: Fork 的平台登录、账号工作区与通用参考文件存储
 
 ## 使用入口
 
+正式发行按 `scripts/aihubkit/brands.json` 运营清单为每个专属域名分别构建客户端。构建前只向绑定域名请求 `/api/status`，从 `data` 读取 `system_name`、`logo`、`server_address`、`wechat_qrcode` 和 `api_server_address`。只有这项品牌查询使用专属域名；登录、注册、账号、额度、模型目录、上传和所有 AI 生成接口都使用 `api_server_address`。
+
+安装包内嵌该品牌的元数据快照和图标，未登录及离线启动也可识别品牌。客户端名为 `system_name + "TV"`；账号与素材库使用平台名。启动后、窗口重新获得焦点及每分钟刷新品牌信息，失败时保留本包的有效信息。安装图标与包元数据在下次安装包更新时生效，不在线改写签名应用。侧栏仅显示官网和微信二维码，版本号以客户端名为前缀，作为不可点击的文本展示。平台模式隐藏官方算力渠道行，本地模式保留。
+
+稳定品牌 ID 决定应用标识和默认数据目录（`<id>TV`），与展示名称解耦。不同品牌各自安装、各自保存工作区；重命名平台不迁移数据目录。不改写用户配置的 S3 桶名、资源名或实际路径。
+
+## 清单驱动的品牌发布
+
+每次正式发布覆盖运营清单中的所有品牌、四种桌面目标和对应便携 ZIP。清单只存稳定 ID 与专属域名，名称、API 地址和图标由接口决定。预检一次冻结全部品牌快照和图标，各平台复用该快照。名称重复、元数据或图标获取失败、任一平台验收失败或发布资产缺失时，工作流不会公开 Release。
+
+单品牌验收可运行以下命令；它不替代正式发布的全量清单检查：
+
+```bash
+python3 -m pip install Pillow==11.3.0
+python3 scripts/aihubkit/brands.py snapshot --brand zmodel --output .local/brand-snapshots
+python3 scripts/aihubkit/brands.py build --snapshot .local/brand-snapshots/zmodel --target darwin/arm64
+```
+
+构建入口复用官方脚本、插件、助手运行时和许可证处理。原生构建仍需对应系统和工具链。正式发版前先把功能、运营清单、`AIHUBKIT_VERSION`、`AIHUBKIT_CHANGELOG.md` 合并到远端 `origin/main`，刷新引用并运行 `bash scripts/aihubkit/verify-release-main.sh <发布提交>`，再为该提交创建新的 `aihubkit-v*` 标签。已推送标签不可移动或复用。当前独立发行不使用官方自动更新源；升级下载安装对应品牌的新版。
+
 此 fork 默认启用 aihubkit 适配。打开应用先登录，成功后进入原有工作台。登录页提供注册及邮箱验证码；侧栏底部的「aihubkit 账号」入口提供额度刷新、兑换码充值、分组模型导入和使用日志。账号注册、分组权限与充值规则由 aihubkit 服务决定。
 
 桌面登录页提供「记住账号和密码」：勾选并登录成功后，下次打开应用会自动填充用户名及隐藏显示的密码，仍需点击登录并通过平台验证。退出登录会关闭工作区，但保留已记住的表单；在登录页取消勾选会立即清除已保存的信息。未勾选时成功登录也会清除此前记住的账号密码。服务器部署不提供此功能，可使用浏览器自己的密码管理器。
@@ -32,6 +52,8 @@ description: Fork 的平台登录、账号工作区与通用参考文件存储
 前端请求适配在桌面启动后安装，仅向当前后端 API 添加桌面授权和账号会话请求头，并直接保留调用方的取消信号。避免多层复制 `Request`：WebKit 在垃圾回收后可能丢失复制链中的取消传播，导致离开画布后实时事件流仍占用连接，最终阻塞画布保存等请求。相关回归可在 `web/` 运行 `bun scripts/aihubkit-transport-smoke.mjs`（先安装 Playwright WebKit）；测试覆盖连续切换、取消后写请求以及请求头隔离，不调用真实模型。
 
 平台后端集中在 `backend/internal/integrations/aihubkit/`，前端集中在 `web/src/integrations/aihubkit/`。官方组合根仅增加 `HostRuntime` 和服务配置 hook；凭据与参考存储通过 `app.Extensions` 的可选端口接入。生成域只选择参考存储实现及检查整批参考链接的有效性，不依赖平台账号实现。视频请求复用现有 `aihubkit-video` 协议插件，不另建生成队列或画布流程。
+
+贴牌规则集中在适配层的 `branding`、`brand.tsx` 和 `scripts/aihubkit/brands.py`。官方代码只提供可选展示端口 `ProductPresentationContext`、既有 appearance store、协议显示名映射，以及 `buildinfo` 的通用发行标识。构建与安装脚本通过可选 `BEEFTV_PRODUCT_NAME`、`BEEFTV_INSTALL_NAME`、`BEEFTV_APP_ICON` 等参数复用，默认值仍是官方产品。合并上游时重点关注侧栏和模型配置页面的展示接入、桌面启动与存储目录、安装器参数和复用工作流；不以旧版自有代码覆盖官方新增业务逻辑。
 
 合并官方更新时重点检查：desktop/server 组合入口、`app.Extensions` 凭据解析、生成执行/预检的参考存储选择、前端启动壳及账号菜单插槽。保留官方最新核心逻辑，再调整这些接入点。每次新需求遵守根 `AGENTS.md` 的「Fork 与上游同步原则」。
 
@@ -77,7 +99,7 @@ Node 运行时复用 `scripts/package-agent-host.mjs` 的版本、平台和架�
 
 ## 本地接口
 
-全部位于 `/api/integrations/aihubkit/`，使用工作台标准 `{ code, data, msg, reason }` 信封。除 `session` 查询、登录/注册/验证码及桌面登录表单接口外，均要求已登录。桌面登录表单接口仅在未打开账号工作区时可用，必须携带 `X-Desktop-Token` 和 `X-Aihubkit-Client: 1`，响应禁止缓存；服务器模式拒绝访问。
+全部位于 `/api/integrations/aihubkit/`，使用工作台标准 `{ code, data, msg, reason }` 信封。除 `brand`、`session` 查询、登录/注册/验证码及桌面登录表单接口外，均要求已登录。`GET brand` 返回安装包品牌快照，`GET brand?refresh=1` 在一分钟内至多刷新一次；仍受桌面启动令牌与来源校验保护。桌面登录表单接口仅在未打开账号工作区时可用，必须携带 `X-Desktop-Token` 和 `X-Aihubkit-Client: 1`，响应禁止缓存；服务器模式拒绝访问。
 
 未登录的桌面 `session` 响应以 `rememberLoginAvailable: true` 表示支持表单记忆。`login` 的可选布尔字段 `rememberCredentials` 默认为 `false`，仅在账号验证和工作区启动成功后保存或清除表单，错误密码不会覆盖已有记录；服务器模式拒绝开启此选项。
 

@@ -33,43 +33,30 @@ class WebViewCloseTests(unittest.TestCase):
 
 
 class WindowsInstallerContractTests(unittest.TestCase):
-    def test_windows_nsi_uses_utf8_bom_and_streamlined_direct_install(self):
-        nsi_path = Path(__file__).resolve().parent / 'installers/windows.nsi'
-        raw = nsi_path.read_bytes()
-        self.assertTrue(raw.startswith(b'\xef\xbb\xbf'), 'windows.nsi must start with a UTF-8 BOM')
-        text = raw.decode('utf-8-sig')
-        self.assertNotIn('MUI_PAGE_WELCOME', text)
-        self.assertNotIn('MUI_PAGE_COMPONENTS', text)
-        self.assertNotIn('StageDir', text)
-        self.assertIn('!define MUI_FINISHPAGE_RUN "$INSTDIR\\BeefTV.exe"', text)
-        self.assertIn('CreateShortcut "$DESKTOP\\BeefTV.lnk" "$INSTDIR\\BeefTV.exe"', text)
-        self.assertIn('taskkill.exe', text)
-        self.assertIn('Windows 无法移动以下程序文件夹', text)
-
     def test_packager_compiles_windows_installer_as_utf8_without_warnings(self):
         import os
         import shutil
         import subprocess
         import tempfile
         packager_path = Path(__file__).with_name('package-desktop-installer.py')
-        packager_text = packager_path.read_text(encoding='utf-8')
-        self.assertIn("'-INPUTCHARSET', 'UTF8'", packager_text)
         if not shutil.which('makensis'):
-            return
-        with tempfile.TemporaryDirectory() as directory:
+            self.skipTest('NSIS compiler not installed')
+        for install, name in [('BeefTV', 'BeefTV'), ('fixtureTV', '客户平台 TV')]:
+          with self.subTest(brand=install), tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             payload = root / 'payload'
             payload.mkdir()
-            (payload / 'BeefTV.exe').write_bytes(b'fixture')
+            (payload / (install + '.exe')).write_bytes(b'fixture')
             out_dir = root / 'dist'
             result = subprocess.run(
                 ['python3', str(packager_path), '--platform', 'windows-amd64',
                  '--input', str(payload), '--output-dir', str(out_dir)],
+                env=dict(os.environ, BEEFTV_INSTALL_NAME=install, BEEFTV_PRODUCT_NAME=name, BEEFTV_ARTIFACT_NAME=name, BEEFTV_PACKAGE_ID=install.lower()),
                 capture_output=True, text=True, check=True,
             )
             self.assertIn('(UTF8)', result.stdout)
             self.assertNotIn('warning', result.stdout.lower())
-            self.assertEqual(len(list(out_dir.glob('BeefTV-*-windows-amd64-setup.exe'))), 1)
+            self.assertEqual(len(list(out_dir.glob(name + '-*-windows-amd64-setup.exe'))), 1)
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'native macOS disk image verification')

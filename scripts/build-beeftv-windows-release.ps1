@@ -41,7 +41,8 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $desktopDir = Join-Path $repoRoot "backend\cmd\desktop"
 $pluginSourceDir = Join-Path $repoRoot "plugin-packages"
 $binDir = Join-Path $desktopDir "build\bin"
-$exePath = Join-Path $binDir "BeefTV.exe"
+$installName = if ($env:BEEFTV_INSTALL_NAME) { $env:BEEFTV_INSTALL_NAME } else { "BeefTV" }
+$exePath = Join-Path $binDir "$installName.exe"
 $pluginResourceDir = Join-Path $binDir "plugin-packages"
 $versionFile = Join-Path $repoRoot "VERSION"
 $wailsModule = "github.com/wailsapp/wails/v2/cmd/wails@v2.16.0"
@@ -432,7 +433,7 @@ if (-not [string]::IsNullOrWhiteSpace($env:BEEFTV_EXTRA_LDFLAGS)) {
 }
 
 Write-Step "Building BeefTV $versionValue ($commitValue) for windows/amd64"
-$appIconSource = Join-Path $repoRoot "assets\app-icon.png"
+$appIconSource = if ($env:BEEFTV_APP_ICON) { $env:BEEFTV_APP_ICON } else { Join-Path $repoRoot "assets\app-icon.png" }
 $buildDir = Join-Path $desktopDir "build"
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 Copy-Item -LiteralPath $appIconSource -Destination (Join-Path $buildDir "appicon.png") -Force

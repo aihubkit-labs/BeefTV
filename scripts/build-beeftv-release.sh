@@ -106,7 +106,7 @@ if [[ "$AGENT_TARGET" == darwin/* ]]; then
 fi
 
 mkdir -p "$DESKTOP_DIR/build"
-cp "$ROOT_DIR/assets/app-icon.png" "$DESKTOP_DIR/build/appicon.png"
+cp "${BEEFTV_APP_ICON:-$ROOT_DIR/assets/app-icon.png}" "$DESKTOP_DIR/build/appicon.png"
 
 (
   cd "$DESKTOP_DIR"
@@ -238,6 +238,11 @@ if [[ -f "$APP_PLIST" ]] && command -v plutil >/dev/null 2>&1; then
   MACOS_VERSION="${MACOS_VERSION%%-*}"
   plutil -replace CFBundleShortVersionString -string "$MACOS_VERSION" "$APP_PLIST"
   plutil -replace CFBundleVersion -string "$MACOS_VERSION" "$APP_PLIST"
+  if [[ -n "${BEEFTV_PRODUCT_ID:-}" ]]; then
+    plutil -replace CFBundleIdentifier -string "$BEEFTV_PRODUCT_ID" "$APP_PLIST"
+    plutil -replace CFBundleName -string "$BEEFTV_PRODUCT_NAME" "$APP_PLIST"
+    plutil -replace CFBundleDisplayName -string "$BEEFTV_PRODUCT_NAME" "$APP_PLIST"
+  fi
 fi
 
 # The plist edit and the bundled CLI both invalidate Wails' ad-hoc signature;

@@ -14,12 +14,13 @@ import threading
 import urllib.error
 import urllib.request
 import zipfile
+from desktop_product import MAC_BUNDLE, LINUX_BUNDLE
 
 
 def smoke(archive, platform):
     relative = ("cli/beeftv.exe" if platform == "windows-amd64" else
-                "BeefTV-linux/cli/beeftv" if platform == "linux-amd64" else
-                "BeefTV.app/Contents/MacOS/cli/beeftv")
+                f"{LINUX_BUNDLE}/cli/beeftv" if platform == "linux-amd64" else
+                f"{MAC_BUNDLE}/Contents/MacOS/cli/beeftv")
     with tempfile.TemporaryDirectory(prefix="beeftv-package-smoke-") as directory:
         root = Path(directory)
         cli = root / relative

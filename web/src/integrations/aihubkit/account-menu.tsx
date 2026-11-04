@@ -11,23 +11,26 @@ import { flushAssetStorePersistence } from "@/stores/use-asset-store";
 import { hub, setHubSession } from "./api";
 import { HubAccountModels } from "./account-models";
 import { useHubSession, useUpdateHubSession } from "./gate";
+import { useHubBrand } from "./brand";
 
 export function HubAccountMenu({ variant = "default", collapsed = false }: { variant?: "default" | "sidebar"; collapsed?: boolean }) {
+    const { platformName } = useHubBrand();
     const session = useHubSession();
     const [open, setOpen] = useState(false);
     if (!session.enabled) return null;
     return <>
-        {variant === "sidebar" ? <button type="button" className={`app-workspace-nav-link group relative isolate flex min-h-11 w-full items-center gap-2 rounded-[var(--r-md)] px-3 py-2 text-[var(--fs-body)] text-foreground/62 transition-[color,transform] duration-200 hover:bg-surface-hover hover:text-foreground${collapsed ? " is-collapsed justify-center" : ""}`} aria-label="aihubkit 账号与额度" title="aihubkit 账号与额度" onClick={() => setOpen(true)}>
+        {variant === "sidebar" ? <button type="button" className={`app-workspace-nav-link group relative isolate flex min-h-11 w-full items-center gap-2 rounded-[var(--r-md)] px-3 py-2 text-[var(--fs-body)] text-foreground/62 transition-[color,transform] duration-200 hover:bg-surface-hover hover:text-foreground${collapsed ? " is-collapsed justify-center" : ""}`} aria-label={`${platformName} 账号与额度`} title={`${platformName} 账号与额度`} onClick={() => setOpen(true)}>
             <UserRound className="size-[18px] shrink-0" strokeWidth={1.8} />
-            {!collapsed ? <span className="app-workspace-nav-title truncate">aihubkit 账号</span> : null}
-        </button> : <Button block type="text" onClick={() => setOpen(true)}>aihubkit 账号与额度</Button>}
-        <AppModal title="aihubkit 账号" open={open} onCancel={() => setOpen(false)} footer={null} width={760}>
+            {!collapsed ? <span className="app-workspace-nav-title truncate">{platformName} 账号</span> : null}
+        </button> : <Button block type="text" onClick={() => setOpen(true)}>{platformName} 账号与额度</Button>}
+        <AppModal title={`${platformName} 账号`} open={open} onCancel={() => setOpen(false)} footer={null} width={760}>
             {open && <AccountPanel />}
         </AppModal>
     </>;
 }
 
 function AccountPanel() {
+    const { platformName, appName } = useHubBrand();
     const session = useHubSession();
     const updateSession = useUpdateHubSession();
     const { message } = App.useApp();
@@ -75,10 +78,10 @@ function AccountPanel() {
                         void action(async () => {
                             const next = await hub.setUploadPreference(checked);
                             updateSession(next);
-                            void message.success(next.uploadToAIHubkit ? "后续参考素材使用 aihubkit 存储" : "后续参考素材使用 BeefTV 存储设置");
+                            void message.success(next.uploadToAIHubkit ? `后续参考素材使用 ${platformName} 存储` : `后续参考素材使用 ${appName} 存储设置`);
                         });
-                    }}>上传到 aihubkit 素材库</Checkbox>
-                    <p className="text-sm text-foreground/60">生成需要上传参考素材时，勾选使用 aihubkit 文件存储；取消勾选后按 BeefTV「存储设置」处理，可使用自己的 S3 桶。</p>
+                    }}>上传到 {platformName} 素材库</Checkbox>
+                    <p className="text-sm text-foreground/60">生成需要上传参考素材时，勾选使用 {platformName} 文件存储；取消勾选后按 {appName}「存储设置」处理，可使用自己的 S3 桶。</p>
                     <p className="text-sm text-foreground/60">首次登录默认勾选，后续登录保留该账号上次的选择。切换影响后续上传，不搬迁已有素材，也不影响模型导入和调用。</p>
                 </section>
                 <p className="text-sm text-foreground/60">退出会停止本机任务处理并关闭当前账号工作区。已提交到上游的任务仍可能计费；重新登录同一账号后可继续查看和取回结果。</p>

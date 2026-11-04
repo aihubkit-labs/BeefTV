@@ -97,6 +97,7 @@ jobs:
           fetch-depth: 0
       - name: Test immutable publication and activation
         run: |
+          python3 -m pip install Pillow==11.3.0
           sh scripts/audit-public-docs.sh
           node --test scripts/configure-ubuntu-apt.test.mjs
           node --test scripts/verify-real-generation-release.test.mjs

@@ -44,7 +44,7 @@ function toolItem(slug: NavigationToolSlug, to: string): WorkspaceNavItem {
     return { id: slug, title: tool?.label ?? slug, icon: tool?.icon, to };
 }
 
-function buildNav(features: FeatureAvailability): { groups: WorkspaceNavGroup[]; footer: WorkspaceNavItem[] } {
+function buildNav(features: FeatureAvailability, brandName: string): { groups: WorkspaceNavGroup[]; footer: WorkspaceNavItem[] } {
     const groups: WorkspaceNavGroup[] = [
         {
             items: [
@@ -60,7 +60,7 @@ function buildNav(features: FeatureAvailability): { groups: WorkspaceNavGroup[];
                 ...(features.pluginCenterEnabled ? [{ ...toolItem("plugins", "/plugins"), title: "插件" }] : []),
                 { id: "settings:channels", title: "模型配置", icon: Settings2, to: "/settings?section=channels" },
                 { id: "settings:storage", title: "存储设置", icon: HardDrive, to: "/settings?section=storage" },
-                { id: "agents", title: "BeefTV MCP", icon: Plug, to: "/agents" },
+                { id: "agents", title: `${brandName} MCP`, icon: Plug, to: "/agents" },
             ],
         },
     ];
@@ -269,7 +269,8 @@ export function WorkspaceSidebarNav({ collapsed, onNavigate, onOpenSearch, onExp
         syncActiveClientPlugins();
     }, []);
     const pluginSidebarEntries = usePluginSlot("app.sidebar");
-    const { groups: baseGroups, footer } = useMemo(() => buildNav(features), [features]);
+    const brandName = useAppearanceStore((state) => state.appearance.brandName);
+    const { groups: baseGroups, footer } = useMemo(() => buildNav(features, brandName), [features, brandName]);
     const groups = useMemo(() => {
         if (!pluginSidebarEntries.length) return baseGroups;
         return [

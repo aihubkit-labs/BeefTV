@@ -3,6 +3,7 @@ package desktopupdate
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"infinite-canvas/backend/internal/buildinfo"
 	"net/url"
 	"os"
 	"runtime"
@@ -13,18 +14,18 @@ import (
 // Link-time variables. Release builds inject an HTTPS feed and a base64 raw
 // 32-byte Ed25519 public key. Both empty disables the updater.
 var (
-	FeedURL   = ""
-	PublicKey = ""
+	FeedURL         = ""
+	PublicKey       = ""
+	appBundleName   = buildinfo.DataDirectory + ".app"
+	linuxBundleName = buildinfo.DataDirectory + "-linux"
+	windowsExeName  = buildinfo.DataDirectory + ".exe"
 )
 
 const (
-	DefaultFeedURL  = "https://updates.beefapi.com/beeftv/desktop-update-v2.json"
-	LegacyFeedURL   = "https://updates.beefapi.com/beeftv/desktop-update.json"
-	helperFlag      = "--beeftv-update-helper"
-	appBundleName   = "BeefTV.app"
-	linuxBundleName = "BeefTV-linux"
-	windowsExeName  = "BeefTV.exe"
-	pluginDirName   = "plugin-packages"
+	DefaultFeedURL = "https://updates.beefapi.com/beeftv/desktop-update-v2.json"
+	LegacyFeedURL  = "https://updates.beefapi.com/beeftv/desktop-update.json"
+	helperFlag     = "--beeftv-update-helper"
+	pluginDirName  = "plugin-packages"
 	// 随包 CLI：外部 Agent 的接入入口，升级包里必须带上，否则升级一次就断了接入。
 	// 它必须待在自己的 cli 目录里：macOS 与 Windows 的文件名都不分大小写，
 	// beeftv 直接放在主程序旁边会和 BeefTV / BeefTV.exe 撞成同一个文件。

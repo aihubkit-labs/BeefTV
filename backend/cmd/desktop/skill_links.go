@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/skillhub"
 )
 
@@ -15,7 +16,7 @@ import (
 // downloads a package, connects an account or confirms an installation.
 func skillLinkRoute(raw string) (string, error) {
 	u, err := url.Parse(raw)
-	if err != nil || len(raw) > 1024 || u.Scheme != "beeftv" || u.Host != "skills" || u.Path != "/install" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+	if err != nil || len(raw) > 1024 || u.Scheme != buildinfo.ProductScheme || u.Host != "skills" || u.Path != "/install" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
 		return "", fmt.Errorf("技能链接无效")
 	}
 	q, err := url.ParseQuery(u.RawQuery)

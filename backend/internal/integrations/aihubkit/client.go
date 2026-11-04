@@ -16,13 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"infinite-canvas/backend/internal/integrations/aihubkit/branding"
 	"infinite-canvas/backend/internal/outbound"
 )
 
 const Origin = "https://apimodel.aihubkit.com"
 const credentialPrefix = "aihubkit:"
 
-var errHubConnection = errors.New("无法连接 aihubkit，请稍后重试")
+var errHubConnection = errors.New("无法连接平台，请稍后重试")
 
 type hubConnectionError struct {
 	phase     string
@@ -52,9 +53,11 @@ type CatalogModel struct {
 	Endpoints []string `json:"supported_endpoint_types"`
 }
 type client struct {
-	origin     string
-	http       *http.Client
-	uploadHTTP *http.Client
+	origin       string
+	platformName string
+	brand        *branding.Service
+	http         *http.Client
+	uploadHTTP   *http.Client
 }
 
 func newClient() *client {
@@ -62,7 +65,31 @@ func newClient() *client {
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	uploadHTTP := outbound.OutboundHTTPClient(10 * time.Minute)
 	uploadHTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &client{origin: Origin, http: h, uploadHTTP: uploadHTTP}
+	return &client{origin: Origin, platformName: "aihubkit", http: h, uploadHTTP: uploadHTTP}
+}
+
+func (c *client) upstreamOrigin() string {
+	if c.brand != nil && c.brand.Current().ID != "" {
+		return c.brand.Current().APIOrigin
+	}
+	return c.origin
+}
+
+func (c *client) accountOrigin() string {
+	if c.brand != nil && c.brand.Current().ID != "" {
+		return c.brand.Current().Origin
+	}
+	return c.origin
+}
+
+func (c *client) displayName() string {
+	if c.brand != nil && c.brand.Current().ID != "" {
+		return c.brand.Current().PlatformName
+	}
+	if c.platformName != "" {
+		return c.platformName
+	}
+	return "aihubkit"
 }
 
 // Remote error bodies and transport errors may contain credentials or signed
@@ -76,9 +103,9 @@ func (c *client) call(ctx context.Context, method, path string, payload any, tok
 		}
 		body = bytes.NewReader(b)
 	}
-	r, err := http.NewRequestWithContext(ctx, method, c.origin+path, body)
+	r, err := http.NewRequestWithContext(ctx, method, c.upstreamOrigin()+path, body)
 	if err != nil {
-		return errors.New("aihubkit 请求无效")
+		return errors.New("平台请求无效")
 	}
 	r.Header.Set("Accept", "application/json")
 	if payload != nil {
@@ -106,7 +133,7 @@ func (c *client) call(ctx context.Context, method, path string, payload any, tok
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errors.New("aihubkit 拒绝请求，请检查账号权限、凭据和额度")
+		return errors.New("平台拒绝请求，请检查账号权限、凭据和额度")
 	}
 	var envelope struct {
 		Success bool            `json:"success"`
@@ -114,13 +141,13 @@ func (c *client) call(ctx context.Context, method, path string, payload any, tok
 		Object  string          `json:"object"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&envelope); err != nil {
-		return errors.New("aihubkit 响应格式无效")
+		return errors.New("平台响应格式无效")
 	}
 	if !envelope.Success && envelope.Object != "list" {
-		return errors.New("aihubkit 操作未成功，请检查输入、账号状态或稍后重试")
+		return errors.New("平台操作未成功，请检查输入、账号状态或稍后重试")
 	}
 	if result != nil && json.Unmarshal(envelope.Data, result) != nil {
-		return errors.New("aihubkit 响应数据无效")
+		return errors.New("平台响应数据无效")
 	}
 	return nil
 }
@@ -131,7 +158,8 @@ func (c *client) login(ctx context.Context, username, password string) (User, st
 	jar, _ := cookiejar.New(nil)
 	loginHTTP := *c.http
 	loginHTTP.Jar = jar
-	loginClient := &client{origin: c.origin, http: &loginHTTP}
+	loginClient := *c
+	loginClient.http = &loginHTTP
 	var user User
 	err := loginClient.call(ctx, "POST", "/api/user/login", map[string]string{"username": username, "password": password}, "", 0, &user)
 	if err != nil {

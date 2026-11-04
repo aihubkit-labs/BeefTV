@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
+from desktop_product import LINUX_BUNDLE
 
 
 def smoke(archive):
@@ -21,7 +22,7 @@ def smoke(archive):
                 bundle.extract(item, root)
                 if target.is_file():
                     target.chmod((item.external_attr >> 16) & 0o777)
-        app = root / "BeefTV-linux" / "BeefTV"
+        app = root / LINUX_BUNDLE / "BeefTV"
         data = root / "isolated data"
         env = {k: v for k, v in os.environ.items() if not k.startswith(("CANVAS_", "BEEFTV_"))}
         # CI has no GPU; the WebView uses software rendering under Xvfb.

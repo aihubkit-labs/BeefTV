@@ -29,7 +29,7 @@ func (h *Host) saveLoginForm(username, password string, remember bool) error {
 		}
 		return nil
 	}
-	data, err := json.Marshal(rememberedLogin{Origin: h.client.origin, Username: username, Password: password})
+	data, err := json.Marshal(rememberedLogin{Origin: h.client.upstreamOrigin(), Username: username, Password: password})
 	if err != nil {
 		return errors.New("无法保存账号密码")
 	}
@@ -56,7 +56,7 @@ func (h *Host) loadLoginForm() (*rememberedLogin, error) {
 	if err != nil || json.Unmarshal([]byte(plain), &saved) != nil || saved.Username == "" || saved.Password == "" {
 		return nil, errors.New("无法解密记住的账号密码，可手动输入后登录")
 	}
-	if saved.Origin != h.client.origin {
+	if saved.Origin != h.client.upstreamOrigin() {
 		return nil, nil
 	}
 	return &saved, nil

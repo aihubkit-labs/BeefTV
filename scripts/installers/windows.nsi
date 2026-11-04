@@ -1,4 +1,13 @@
 ﻿Unicode true
+!ifndef INSTALLNAME
+!define INSTALLNAME "BeefTV"
+!endif
+!ifndef PRODUCTNAME
+!define PRODUCTNAME "BeefTV"
+!endif
+!ifndef PACKAGEID
+!define PACKAGEID "beeftv"
+!endif
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "StrFunc.nsh"
@@ -6,13 +15,13 @@
 !include "FileFunc.nsh"
 ${StrStr}
 ${UnStrStr}
-Name "BeefTV"
+Name "${PRODUCTNAME}"
 OutFile "${OUTPUT}"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-InstallDir "$LOCALAPPDATA\Programs\BeefTV"
+InstallDir "$LOCALAPPDATA\Programs\${INSTALLNAME}"
 # Upgrades default to the previous location; the user can still choose another folder.
-InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "InstallLocation"
+InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "InstallLocation"
 Var BackupDir
 Var CleanDir
 Var InstallParent
@@ -28,28 +37,28 @@ Var MoveError
 Var MoveAttempt
 Var OldMoved
 VIProductVersion "${VERSION}.0"
-VIAddVersionKey "ProductName" "BeefTV"
+VIAddVersionKey "ProductName" "${PRODUCTNAME}"
 VIAddVersionKey "FileVersion" "${VERSION}"
-VIAddVersionKey "FileDescription" "BeefTV Setup"
-VIAddVersionKey "LegalCopyright" "BeefTV"
+VIAddVersionKey "FileDescription" "${PRODUCTNAME} Setup"
+VIAddVersionKey "LegalCopyright" "BeefTV Contributors"
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\BeefTV.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${INSTALLNAME}.exe"
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-LangString BEEFTV_DIR_FOREIGN ${LANG_ENGLISH} "This folder already holds other files and is not a BeefTV installation. Choose an empty folder or the current BeefTV location."
-LangString BEEFTV_DIR_FOREIGN ${LANG_SIMPCHINESE} "这个文件夹里已有其他文件，不是 BeefTV 安装位置。请选择一个空文件夹，或当前的 BeefTV 安装位置。"
-LangString BEEFTV_DIR_WRITE ${LANG_ENGLISH} "BeefTV cannot write here. Administrator rights are required, so choose another folder."
+LangString BEEFTV_DIR_FOREIGN ${LANG_ENGLISH} "This folder already holds other files and is not a ${INSTALLNAME} installation. Choose an empty folder or the current ${INSTALLNAME} location."
+LangString BEEFTV_DIR_FOREIGN ${LANG_SIMPCHINESE} "这个文件夹里已有其他文件，不是 ${INSTALLNAME} 安装位置。请选择一个空文件夹，或当前的 ${INSTALLNAME} 安装位置。"
+LangString BEEFTV_DIR_WRITE ${LANG_ENGLISH} "${INSTALLNAME} cannot write here. Administrator rights are required, so choose another folder."
 LangString BEEFTV_DIR_WRITE ${LANG_SIMPCHINESE} "需要管理员权限，请选择其他文件夹。"
-LangString BEEFTV_BUSY ${LANG_ENGLISH} "Another BeefTV installer or uninstaller is running. Close it and try again."
-LangString BEEFTV_BUSY ${LANG_SIMPCHINESE} "另一个 BeefTV 安装或卸载程序正在运行。请先关闭它，再试一次。"
-LangString BEEFTV_CLOSE ${LANG_ENGLISH} "Please close BeefTV and its CLI, then choose Retry."
-LangString BEEFTV_CLOSE ${LANG_SIMPCHINESE} "请退出 BeefTV 及其命令行程序，然后点击“重试”。"
+LangString BEEFTV_BUSY ${LANG_ENGLISH} "Another ${INSTALLNAME} installer or uninstaller is running. Close it and try again."
+LangString BEEFTV_BUSY ${LANG_SIMPCHINESE} "另一个 ${INSTALLNAME} 安装或卸载程序正在运行。请先关闭它，再试一次。"
+LangString BEEFTV_CLOSE ${LANG_ENGLISH} "Please close ${INSTALLNAME} and its CLI, then choose Retry."
+LangString BEEFTV_CLOSE ${LANG_SIMPCHINESE} "请退出 ${INSTALLNAME} 及其命令行程序，然后点击“重试”。"
 LangString BEEFTV_RETRY ${LANG_ENGLISH} "Windows could not move this application folder (error $MoveError):$\r$\n$MoveFrom$\r$\n$\r$\nClose programs or terminal windows using it, then choose Retry. Cancel stops this installation.$\r$\nLog: $InstallLog"
 LangString BEEFTV_RETRY ${LANG_SIMPCHINESE} "Windows 无法移动以下程序文件夹（错误 $MoveError）：$\r$\n$MoveFrom$\r$\n$\r$\n请关闭正在使用它的程序或终端窗口，然后点击“重试”。点击“取消”将停止安装。$\r$\n安装日志：$InstallLog"
 LangString BEEFTV_PRESERVED ${LANG_ENGLISH} "Installation stopped. The previous application is still at $INSTDIR. Your projects are preserved.$\r$\nLog: $InstallLog"
@@ -63,7 +72,7 @@ LangString BEEFTV_RESTORE_FAILED ${LANG_SIMPCHINESE} "Windows 未能恢复原程
 # race while moving folders or updating the per-user registration.
 !macro InstallerLock PREFIX
 Function ${PREFIX}AcquireInstallerLock
-  System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Local\BeefTV.Installation") p .r0 ?e'
+  System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Local\${INSTALLNAME}.Installation") p .r0 ?e'
   Pop $1
   StrCpy $InstallerMutex $0
   ${If} $0 == 0
@@ -114,15 +123,15 @@ Function MoveInstallFolder
   StrCpy $0 0
 FunctionEnd
 
-# Appends a dedicated BeefTV subfolder to the chosen location (including drive
+# Appends a dedicated ${INSTALLNAME} subfolder to the chosen location (including drive
 # roots like D:\ or E:\), then validates that final folder. Choosing E:\ or
-# D:\Apps therefore installs to E:\BeefTV or D:\Apps\BeefTV and never mixes the
+# D:\Apps therefore installs to E:\${INSTALLNAME} or D:\Apps\${INSTALLNAME} and never mixes the
 # payload with the user's other files. Sets $0 to 0 when valid, or 2 (foreign
 # folder), 3 (not writable).
 Function PrepareInstallDir
   StrCpy $0 0
   ${If} $INSTDIR == ""
-    StrCpy $INSTDIR "$LOCALAPPDATA\Programs\BeefTV"
+    StrCpy $INSTDIR "$LOCALAPPDATA\Programs\${INSTALLNAME}"
   ${EndIf}
   # Drop trailing separators so the last component is a real name.
   StrCpy $1 "$INSTDIR"
@@ -138,19 +147,18 @@ Function PrepareInstallDir
     ${EndIf}
   ${GetRoot} "$1" $2
   ${If} $2 == "$1"
-    StrCpy $1 "$1\BeefTV"
+    StrCpy $1 "$1\${INSTALLNAME}"
   ${Else}
     ${GetFileName} "$1" $2
-    ${If} $2 != "BeefTV"
-      StrCpy $1 "$1\BeefTV"
+    ${If} $2 != "${INSTALLNAME}"
+      StrCpy $1 "$1\${INSTALLNAME}"
     ${EndIf}
   ${EndIf}
-  # An existing final folder is only reused when it is a previous BeefTV
-  # install (or portable BeefTV directory) or empty.
+  # An existing final folder is only reused when it is a previous ${INSTALLNAME}
+  # install (or portable ${INSTALLNAME} directory) or empty.
   StrCpy $5 ""
   ${If} ${FileExists} "$1\*.*"
-    ${IfNot} ${FileExists} "$1\.installed-root-files.txt"
-    ${AndIfNot} ${FileExists} "$1\BeefTV.exe"
+    ${IfNot} ${FileExists} "$1\${INSTALLNAME}.exe"
       StrCpy $3 ""
       FindFirst $2 $4 "$1\*"
       PrepareInstallDir_scan:
@@ -216,19 +224,21 @@ Function ${PREFIX}RequireClosed
   retry_closed_${PREFIX}:
   StrCpy $3 0
   check_closed_${PREFIX}:
-  nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq BeefTV.exe" /NH'
+  nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq ${INSTALLNAME}.exe" /NH'
   Pop $0
   Pop $1
 !if "${PREFIX}" == "un."
-  ${UnStrStr} $2 $1 "BeefTV.exe"
+  ${UnStrStr} $2 $1 "${INSTALLNAME}.exe"
 !else
-  ${StrStr} $2 $1 "BeefTV.exe"
+  ${StrStr} $2 $1 "${INSTALLNAME}.exe"
 !endif
   ${If} $2 == ""
+!if "${INSTALLNAME}" == "BeefTV"
 !if "${PREFIX}" == "un."
     ${UnStrStr} $2 $1 "beeftv.exe"
 !else
     ${StrStr} $2 $1 "beeftv.exe"
+!endif
 !endif
   ${EndIf}
   ${If} $0 == 0
@@ -241,9 +251,9 @@ Function ${PREFIX}RequireClosed
   ${EndIf}
   IntOp $3 $3 + 1
   ${If} $3 == 1
-    # Ask BeefTV's main window to close cleanly first so SQLite and WebView2
+    # Ask ${INSTALLNAME}'s main window to close cleanly first so SQLite and WebView2
     # flush state before exiting.
-    nsExec::Exec '"$SYSDIR\taskkill.exe" /IM BeefTV.exe'
+    nsExec::Exec '"$SYSDIR\taskkill.exe" /IM ${INSTALLNAME}.exe'
     Pop $0
     Sleep 500
     Goto check_closed_${PREFIX}
@@ -251,11 +261,13 @@ Function ${PREFIX}RequireClosed
     Sleep 500
     Goto check_closed_${PREFIX}
   ${ElseIf} $3 == 11
-    # Force-terminate any remaining BeefTV or CLI process tree.
-    nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM BeefTV.exe /T'
+    # Force-terminate any remaining ${INSTALLNAME} or CLI process tree.
+    nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM ${INSTALLNAME}.exe /T'
     Pop $0
+!if "${INSTALLNAME}" == "BeefTV"
     nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM beeftv.exe /T'
     Pop $0
+!endif
     Sleep 500
     Goto check_closed_${PREFIX}
   ${ElseIf} $3 <= 20
@@ -302,7 +314,7 @@ Function ${PREFIX}RemovePayload
     done_${PREFIX}:
     FileClose $0
   ${EndIf}
-  Delete "$CleanDir\BeefTV.exe"
+  Delete "$CleanDir\${INSTALLNAME}.exe"
   Delete "$CleanDir\.installed-root-files.txt"
   Delete "$CleanDir\Uninstall.exe"
   RMDir /r "$CleanDir\agent-host"
@@ -319,8 +331,8 @@ Function .onInit
   SetShellVarContext current
   Call AcquireInstallerLock
   ClearErrors
-  CreateDirectory "$LOCALAPPDATA\BeefTV\Installer"
-  GetTempFileName $InstallLog "$LOCALAPPDATA\BeefTV\Installer"
+  CreateDirectory "$LOCALAPPDATA\${INSTALLNAME}\Installer"
+  GetTempFileName $InstallLog "$LOCALAPPDATA\${INSTALLNAME}\Installer"
   ${If} ${Errors}
     ClearErrors
     GetTempFileName $InstallLog "$TEMP"
@@ -335,7 +347,7 @@ Function .onInit
   StrCpy $InstallPhase "startup"
   StrCpy $LogLine 'version=${VERSION} destination="$INSTDIR"'
   Call WriteInstallLog
-  ReadRegStr $PreviousInstallDir HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "InstallLocation"
+  ReadRegStr $PreviousInstallDir HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "InstallLocation"
   Call RequireClosed
   # Interactive runs validate on the directory page; /D= needs the same checks here.
   ${If} ${Silent}
@@ -359,7 +371,7 @@ Function .onInstFailed
   Call WriteInstallLog
 FunctionEnd
 
-Section "BeefTV (required)" SEC_APP
+Section "${INSTALLNAME} (required)" SEC_APP
   SectionIn RO
   Call RequireClosed
   StrCpy $InstallPhase "prepare"
@@ -471,21 +483,21 @@ Section "BeefTV (required)" SEC_APP
   Abort
   install_registered:
   SetOutPath "$INSTDIR"
-  CreateDirectory "$SMPROGRAMS\BeefTV"
-  CreateShortcut "$SMPROGRAMS\BeefTV\BeefTV.lnk" "$INSTDIR\BeefTV.exe"
-  CreateShortcut "$SMPROGRAMS\BeefTV\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\BeefTV.lnk" "$INSTDIR\BeefTV.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "DisplayName" "BeefTV"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "DisplayIcon" "$INSTDIR\BeefTV.exe"
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "NoModify" 1
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "NoRepair" 1
-  WriteRegStr HKCU "Software\Classes\beeftv" "" "URL:BeefTV skill link"
-  WriteRegStr HKCU "Software\Classes\beeftv" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\beeftv\shell\open\command" "" '$\"$INSTDIR\BeefTV.exe$\" $\"%1$\"'
+  CreateDirectory "$SMPROGRAMS\${INSTALLNAME}"
+  CreateShortcut "$SMPROGRAMS\${INSTALLNAME}\${INSTALLNAME}.lnk" "$INSTDIR\${INSTALLNAME}.exe"
+  CreateShortcut "$SMPROGRAMS\${INSTALLNAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$DESKTOP\${INSTALLNAME}.lnk" "$INSTDIR\${INSTALLNAME}.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "DisplayName" "${PRODUCTNAME}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "DisplayIcon" "$INSTDIR\${INSTALLNAME}.exe"
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "NoModify" 1
+  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "NoRepair" 1
+  WriteRegStr HKCU "Software\Classes\${PACKAGEID}" "" "URL:${INSTALLNAME} skill link"
+  WriteRegStr HKCU "Software\Classes\${PACKAGEID}" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\${PACKAGEID}\shell\open\command" "" '$\"$INSTDIR\${INSTALLNAME}.exe$\" $\"%1$\"'
   # A successful move replaces the registered install; remove only the old
   # installer's shipped payload. Unknown user files remain in that directory.
   ${If} $PreviousInstallDir != ""
@@ -513,16 +525,16 @@ Section "Uninstall"
   Call un.RemovePayload
   # A stale uninstaller copied from an older location must not unregister
   # or remove shortcuts for the current installation.
-  ReadRegStr $RegisteredInstallDir HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV" "InstallLocation"
+  ReadRegStr $RegisteredInstallDir HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "InstallLocation"
   ${If} $RegisteredInstallDir == $INSTDIR
-    ReadRegStr $0 HKCU "Software\Classes\beeftv\shell\open\command" ""
-    ${If} $0 == '$\"$INSTDIR\BeefTV.exe$\" $\"%1$\"'
-      DeleteRegKey HKCU "Software\Classes\beeftv"
+    ReadRegStr $0 HKCU "Software\Classes\${PACKAGEID}\shell\open\command" ""
+    ${If} $0 == '$\"$INSTDIR\${INSTALLNAME}.exe$\" $\"%1$\"'
+      DeleteRegKey HKCU "Software\Classes\${PACKAGEID}"
     ${EndIf}
-    Delete "$DESKTOP\BeefTV.lnk"
-    Delete "$SMPROGRAMS\BeefTV\BeefTV.lnk"
-    Delete "$SMPROGRAMS\BeefTV\Uninstall.lnk"
-    RMDir "$SMPROGRAMS\BeefTV"
-    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\BeefTV"
+    Delete "$DESKTOP\${INSTALLNAME}.lnk"
+    Delete "$SMPROGRAMS\${INSTALLNAME}\${INSTALLNAME}.lnk"
+    Delete "$SMPROGRAMS\${INSTALLNAME}\Uninstall.lnk"
+    RMDir "$SMPROGRAMS\${INSTALLNAME}"
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}"
   ${EndIf}
 SectionEnd

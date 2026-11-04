@@ -34,11 +34,15 @@ on:
         description: Optional application version override for a standalone distribution
         type: string
         default: ''
+      brand-id:
+        description: Optional distribution from the frozen operational brand snapshot
+        type: string
+        default: ''
 
 permissions:
   contents: read
 concurrency:
-  group: installers-${{ github.event.pull_request.number || github.ref }}
+  group: installers-${{ github.event.pull_request.number || github.ref }}-${{ inputs.brand-id }}
   cancel-in-progress: false
 
 jobs:
@@ -79,6 +83,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Retrieve frozen brand snapshot
+        if: inputs.brand-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-brand-snapshots
+          path: brand-snapshots
+      - name: Select distribution identity
+        if: inputs.brand-id != ''
+        shell: bash
+        env:
+          BRAND_ID: ${{ inputs.brand-id }}
+        run: python scripts/aihubkit/brands.py env --snapshot "brand-snapshots/$BRAND_ID" --github-env "$GITHUB_ENV"
       - name: Retrieve source bundle for packaged license links
         if: inputs.standalone-release
         uses: actions/download-artifact@v4
@@ -128,17 +144,29 @@ jobs:
           BEEFTV_WAILS_PLATFORM: ${{ matrix.target }}
           BEEFTV_UPDATER_PUBLIC_KEY: ${{ !inputs.standalone-release && vars.BEEFTV_UPDATER_PUBLIC_KEY || '' }}
           BEEFTV_RELEASE_TAG: ${{ inputs.release-tag }}
+          BRAND_ID: ${{ inputs.brand-id }}
         run: |
           sh plugin-packages/build-packages.sh
-          ./scripts/build-beeftv-release.sh
+          if [[ -n "$BRAND_ID" ]]; then
+            python scripts/aihubkit/brands.py build --snapshot "brand-snapshots/$BRAND_ID" --target '${{ matrix.target }}'
+          else
+            ./scripts/build-beeftv-release.sh
+          fi
       - name: Build Windows desktop
         if: runner.os == 'Windows'
         env:
           CGO_ENABLED: '1'
           BEEFTV_UPDATER_PUBLIC_KEY: ${{ !inputs.standalone-release && vars.BEEFTV_UPDATER_PUBLIC_KEY || '' }}
           BEEFTV_RELEASE_TAG: ${{ inputs.release-tag }}
+          BRAND_ID: ${{ inputs.brand-id }}
         shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-beeftv-windows-release.ps1
+        run: |
+          if ($env:BRAND_ID) {
+            python scripts/aihubkit/brands.py build --snapshot "brand-snapshots/$env:BRAND_ID" --target windows/amd64
+          } else {
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-beeftv-windows-release.ps1
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package native installer
         shell: bash
         run: python scripts/package-desktop-installer.py --platform '${{ matrix.platform }}'
@@ -147,7 +175,7 @@ jobs:
         working-directory: backend
         shell: pwsh
         run: |
-          go run ./cmd/update-release package --platform windows-amd64 --input cmd/desktop/build/bin --output "$env:RUNNER_TEMP/BeefTV-windows-updater-check.zip"
+          go run "-ldflags=$env:BEEFTV_EXTRA_LDFLAGS" ./cmd/update-release package --platform windows-amd64 --input cmd/desktop/build/bin --output "$env:RUNNER_TEMP/BeefTV-windows-updater-check.zip"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test actual installation and preserved user data
         shell: bash
@@ -155,21 +183,23 @@ jobs:
           set -euo pipefail
           version="${BEEFTV_RELEASE_VERSION:-$(tr -d '[:space:]' < VERSION)}"
           platform='${{ matrix.platform }}'
+          product="${BEEFTV_INSTALL_NAME:-BeefTV}"
+          artifact="${BEEFTV_ARTIFACT_NAME:-BeefTV}"
           payload='backend/cmd/desktop/build/bin'
           suffix='-setup.exe'
-          if [[ "$platform" == darwin-* ]]; then payload="$payload/BeefTV.app"; suffix='.dmg'; fi
-          if [[ "$platform" == linux-* ]]; then payload="$payload/BeefTV-linux"; suffix='.deb'; fi
-          command=(python scripts/smoke-desktop-installer.py --platform "$platform" --installer "dist/BeefTV-${version}-${platform}${suffix}" --payload "$payload")
+          if [[ "$platform" == darwin-* ]]; then payload="$payload/$product.app"; suffix='.dmg'; fi
+          if [[ "$platform" == linux-* ]]; then payload="$payload/$product-linux"; suffix='.deb'; fi
+          command=(python scripts/smoke-desktop-installer.py --platform "$platform" --installer "dist/${artifact}-${version}-${platform}${suffix}" --payload "$payload")
           if [[ "$platform" == linux-* ]]; then xvfb-run -a dbus-run-session -- "${command[@]}"; else "${command[@]}"; fi
       - name: Verify DEB dependencies on clean Ubuntu
         if: runner.os == 'Linux'
         run: |
-          docker run --rm -v "${PWD}/dist:/packages:ro" ubuntu:24.04 sh -ec '
+          docker run --rm -v "${PWD}/dist:/packages:ro" -e PRODUCT="${BEEFTV_INSTALL_NAME:-BeefTV}" -e PACKAGE="${BEEFTV_PACKAGE_ID:-beeftv}" ubuntu:24.04 sh -ec '
             apt-get update
-            apt-get install -y /packages/BeefTV-*.deb
+            apt-get install -y /packages/*.deb
             dpkg --audit
-            dpkg --verify beeftv
-            ldd /opt/beeftv/BeefTV-linux/BeefTV > /tmp/links
+            dpkg --verify "$PACKAGE"
+            ldd "/opt/$PACKAGE/$PRODUCT-linux/BeefTV" > /tmp/links
             cat /tmp/links
             ! grep -q "not found" /tmp/links
           '
@@ -181,21 +211,23 @@ jobs:
           version="${BEEFTV_RELEASE_VERSION:-$(tr -d '[:space:]' < VERSION)}"
           platform='${{ matrix.platform }}'
           payload='cmd/desktop/build/bin'
-          if [[ "$platform" == darwin-* ]]; then payload="$payload/BeefTV.app"; fi
-          if [[ "$platform" == linux-* ]]; then payload="$payload/BeefTV-linux"; fi
+          product="${BEEFTV_INSTALL_NAME:-BeefTV}"
+          artifact="${BEEFTV_ARTIFACT_NAME:-BeefTV}"
+          if [[ "$platform" == darwin-* ]]; then payload="$payload/$product.app"; fi
+          if [[ "$platform" == linux-* ]]; then payload="$payload/$product-linux"; fi
           (
             cd backend
-            go run ./cmd/update-release package --platform "$platform" --input "$payload" --output "../dist/BeefTV-${version}-${platform}.zip"
+            go run -ldflags "${BEEFTV_EXTRA_LDFLAGS:-}" ./cmd/update-release package --platform "$platform" --input "$payload" --output "../dist/${artifact}-${version}-${platform}.zip"
           )
-          python scripts/smoke-packaged-cli.py --platform "$platform" --archive "dist/BeefTV-${version}-${platform}.zip"
+          python scripts/smoke-packaged-cli.py --platform "$platform" --archive "dist/${artifact}-${version}-${platform}.zip"
           if [[ "$platform" == linux-* ]]; then
-            xvfb-run -a dbus-run-session -- python scripts/smoke-linux-desktop.py --archive "dist/BeefTV-${version}-${platform}.zip"
+            xvfb-run -a dbus-run-session -- python scripts/smoke-linux-desktop.py --archive "dist/${artifact}-${version}-${platform}.zip"
           fi
       - name: Preserve installer artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: installer-check-${{ matrix.platform }}
-          path: dist/BeefTV-*-${{ matrix.platform }}*
+          name: installer-check-${{ inputs.brand-id }}-${{ matrix.platform }}
+          path: dist/*-${{ matrix.platform }}*
           retention-days: 7
           if-no-files-found: error

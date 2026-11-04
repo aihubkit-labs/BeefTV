@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"crypto/sha256"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"io"
 	"os"
 	"path"
@@ -12,14 +13,18 @@ import (
 	"strings"
 )
 
+var (
+	macBundleName     = buildinfo.DataDirectory + ".app"
+	linuxBundleName   = buildinfo.DataDirectory + "-linux"
+	windowsExecutable = buildinfo.DataDirectory + ".exe"
+)
+
 const (
 	platformDarwinARM64  = "darwin-arm64"
 	platformDarwinAMD64  = "darwin-amd64"
 	platformWindowsAMD64 = "windows-amd64"
 	platformLinuxAMD64   = "linux-amd64"
-	linuxBundleName      = "BeefTV-linux"
 	macExecutableRel     = "Contents/MacOS/BeefTV"
-	windowsExecutable    = "BeefTV.exe"
 	pluginDirName        = "plugin-packages"
 	pluginSuffix         = ".beeftv-plugin"
 )
@@ -126,10 +131,10 @@ func resolveBundleRoot(platform, input string) (string, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("package input must be a real directory, not a symlink")
 		}
-		if info.IsDir() && filepath.Base(abs) == "BeefTV.app" {
+		if info.IsDir() && filepath.Base(abs) == macBundleName {
 			return abs, nil
 		}
-		candidate := filepath.Join(abs, "BeefTV.app")
+		candidate := filepath.Join(abs, macBundleName)
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 			return candidate, nil
 		}
@@ -306,7 +311,7 @@ func validateArchive(platform, zipPath string) error {
 	requiredMedia := map[string]map[string]bool{}
 	cliPath := "cli/beeftv.exe"
 	if strings.HasPrefix(platform, "darwin-") {
-		cliPath = "BeefTV.app/Contents/MacOS/cli/beeftv"
+		cliPath = macBundleName + "/Contents/MacOS/cli/beeftv"
 	}
 	if platform == platformLinuxAMD64 {
 		cliPath = linuxBundleName + "/cli/beeftv"
@@ -315,7 +320,7 @@ func validateArchive(platform, zipPath string) error {
 	agentPrefix := "agent-host/"
 	nodeRelative := "runtime/node.exe"
 	if strings.HasPrefix(platform, "darwin-") {
-		agentPrefix = "BeefTV.app/Contents/Resources/agent-host/"
+		agentPrefix = macBundleName + "/Contents/Resources/agent-host/"
 		nodeRelative = "runtime/bin/node"
 	}
 	if platform == platformLinuxAMD64 {
@@ -372,7 +377,7 @@ func validateArchive(platform, zipPath string) error {
 			hasLinuxExec = file.Mode().IsRegular() && file.UncompressedSize64 > 0 && file.Mode()&0o111 != 0
 		case strings.HasPrefix(name, linuxBundleName+"/"+pluginDirName+"/") && strings.HasSuffix(name, pluginSuffix) && file.Mode().IsRegular():
 			pluginCount++
-		case name == "BeefTV.app/"+macExecutableRel || name == "BeefTV.app/"+macExecutableRel+"/":
+		case name == macBundleName+"/"+macExecutableRel || name == macBundleName+"/"+macExecutableRel+"/":
 			hasMacExec = true
 			if file.Mode()&0o111 == 0 {
 				return fmt.Errorf("BeefTV.app/%s must retain executable mode", macExecutableRel)
@@ -389,7 +394,7 @@ func validateArchive(platform, zipPath string) error {
 					pluginCount++
 				}
 			}
-		case strings.HasPrefix(name, "BeefTV.app/Contents/Resources/"+pluginDirName+"/") && strings.HasSuffix(name, pluginSuffix) && file.Mode().IsRegular():
+		case strings.HasPrefix(name, macBundleName+"/Contents/Resources/"+pluginDirName+"/") && strings.HasSuffix(name, pluginSuffix) && file.Mode().IsRegular():
 			pluginCount++
 		}
 	}
@@ -473,7 +478,7 @@ func rejectUserDataDir(root string) error {
 		return err
 	}
 	slash := filepath.ToSlash(abs)
-	if strings.Contains(slash, "/Application Support/BeefTV") && !strings.Contains(slash, "BeefTV.app") {
+	if strings.Contains(slash, "/Application Support/"+buildinfo.DataDirectory) && !strings.Contains(slash, macBundleName) {
 		return fmt.Errorf("refusing to package the macOS user data directory")
 	}
 	if runtime.GOOS == "windows" && strings.Contains(strings.ToLower(slash), "/appdata/roaming/beeftv") {

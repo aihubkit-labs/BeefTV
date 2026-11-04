@@ -1,3 +1,4 @@
+import { clientName } from "@/components/brand/product-presentation";
 import { useCallback, useEffect, useState } from "react";
 import { Button, Progress, type App } from "antd";
 import { getDesktopAppBinding, type DepthComponentState } from "@/services/desktop-runtime";
@@ -17,7 +18,7 @@ export function DepthComponentsPanel({ initialState, onReady, onCancel, onOpenSe
     const [error, setError] = useState("");
     const refresh = useCallback(async (force = false) => {
         try {
-            if (!binding?.DepthComponentStatus) throw new Error("请在 BeefTV 桌面版中管理本地组件");
+            if (!binding?.DepthComponentStatus) throw new Error(`请在 ${clientName()} 桌面版中管理本地组件`);
             setState(await binding.DepthComponentStatus(force));
             setError("");
         } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -70,7 +71,7 @@ type ModalAPI = ReturnType<typeof App.useApp>["modal"];
 
 export async function confirmDepthComponents(modal: ModalAPI): Promise<boolean> {
     const binding = getDesktopAppBinding();
-    if (!binding?.DepthComponentStatus) throw new Error("请先在 BeefTV 桌面版的存储设置中安装深度捕捉组件");
+    if (!binding?.DepthComponentStatus) throw new Error(`请先在 ${clientName()} 桌面版的存储设置中安装深度捕捉组件`);
     const state = await binding.DepthComponentStatus(true);
     if (state.status === "ready") return true;
     return new Promise<boolean>((resolve) => {

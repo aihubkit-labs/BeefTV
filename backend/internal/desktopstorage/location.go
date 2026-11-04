@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,7 @@ func DefaultRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "BeefTV"), nil
+	return filepath.Join(root, buildinfo.DataDirectory), nil
 }
 
 // The pointer stays in the system profile, independent of the selected data volume.
@@ -92,7 +93,7 @@ func saveLocation(root string, location Location) error {
 func canonical(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if !filepath.IsAbs(path) || filepath.Dir(filepath.Clean(path)) == filepath.Clean(path) {
-		return "", errors.New("请选择磁盘中的文件夹，例如 D:\\BeefTV")
+		return "", fmt.Errorf("请选择磁盘中的文件夹，例如 D:\\%s", buildinfo.DataDirectory)
 	}
 	path = filepath.Clean(path)
 	missing := []string{}

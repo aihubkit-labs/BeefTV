@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/desktopstorage"
 	"infinite-canvas/backend/internal/desktopupdate"
 
@@ -37,7 +38,7 @@ func main() {
 	}
 	app := newDesktopApp(dataDir)
 	for _, arg := range os.Args[1:] {
-		if strings.HasPrefix(arg, "beeftv:") {
+		if strings.HasPrefix(arg, buildinfo.ProductScheme+":") {
 			app.queueSkillLink(arg)
 		}
 	}
@@ -58,7 +59,7 @@ func runDesktopApp(app *DesktopApp, run func(*options.App) error) error {
 
 func desktopAppOptions(app *DesktopApp) *options.App {
 	return &options.App{
-		Title:            "BeefTV",
+		Title:            buildinfo.ProductName,
 		Width:            1440,
 		Height:           960,
 		BackgroundColour: &options.RGBA{R: 13, G: 15, B: 18, A: 255},
@@ -88,7 +89,7 @@ func desktopAppOptions(app *DesktopApp) *options.App {
 			UniqueId: skillInstanceID(app.dataDir),
 			OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
 				for _, arg := range data.Args {
-					if strings.HasPrefix(arg, "beeftv:") {
+					if strings.HasPrefix(arg, buildinfo.ProductScheme+":") {
 						app.queueSkillLink(arg)
 					}
 				}

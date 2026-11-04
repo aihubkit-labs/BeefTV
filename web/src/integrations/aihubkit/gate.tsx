@@ -7,6 +7,8 @@ import { ApiError } from "@/services/api/request";
 import type { WorkspaceBootstrapPayload } from "@/services/api/workspace";
 import { appQueryClient } from "@/lib/query-client";
 import { hub, installHubFetch, setHubSession, type HubSession } from "./api";
+import { HubBrandProvider, HubBrandModels, useHubBrand } from "./brand";
+import { BrandLogo } from "@/components/brand/brand-logo";
 
 const HubContext = createContext<HubSession>({ enabled: false, authenticated: false });
 const UpdateHubContext = createContext<(session: HubSession) => void>(() => {});
@@ -39,14 +41,15 @@ export function IntegrationGate({ children, localChildren }: { children: ReactNo
     }, [retry]);
     if (failed) return <WorkspaceErrorState title="无法连接工作台" description="登录服务暂时不可用，请检查后端连接后重试。" onRetry={() => { setFailed(false); setSession(undefined); setRetry((value) => value + 1); }} />;
     if (!session) return <FullScreenLoader label="正在连接工作台" detail={import.meta.env.DEV && retry > 0 ? "等待本地后端完成编译" : "检查账号会话"} />;
-    if (session.enabled && !session.authenticated) return <HubLogin rememberAvailable={session.rememberLoginAvailable === true} onLogin={(value) => { appQueryClient.clear(); setHubSession(value.session); setSession(value); }} />;
-    return <UpdateHubContext.Provider value={setSession}><HubContext.Provider value={session}>
+    const content = session.enabled && !session.authenticated ? <HubLogin rememberAvailable={session.rememberLoginAvailable === true} onLogin={(value) => { appQueryClient.clear(); setHubSession(value.session); setSession(value); }} /> : <UpdateHubContext.Provider value={setSession}><HubContext.Provider value={session}>
         {!!session.modelImportWarnings?.length && <Alert type="warning" showIcon closable title="部分默认模型未导入" description={session.modelImportWarnings.map((warning) => <p key={warning}>{warning}</p>)} />}
-        {!session.enabled && localChildren ? localChildren : <WorkspaceBootstrapHydrator allowLocalFallback={!session.enabled} transformBootstrap={(payload) => accountBootstrap(payload, session)}>{children}</WorkspaceBootstrapHydrator>}
+        {!session.enabled && localChildren ? localChildren : <WorkspaceBootstrapHydrator allowLocalFallback={!session.enabled} transformBootstrap={(payload) => accountBootstrap(payload, session)}>{session.enabled ? <HubBrandModels>{children}</HubBrandModels> : children}</WorkspaceBootstrapHydrator>}
     </HubContext.Provider></UpdateHubContext.Provider>;
+    return session.enabled ? <HubBrandProvider>{content}</HubBrandProvider> : content;
 }
 
 export function HubLogin({ onLogin, rememberAvailable }: { onLogin: (session: HubSession) => void; rememberAvailable: boolean }) {
+    const brand = useHubBrand();
     const [mode, setMode] = useState("login");
     const [busy, setBusy] = useState(false);
     const [sending, setSending] = useState(false);
@@ -82,8 +85,9 @@ export function HubLogin({ onLogin, rememberAvailable }: { onLogin: (session: Hu
     };
     return <main className="flex min-h-dvh items-center justify-center bg-background px-6 py-12 text-foreground">
         <section className="w-full max-w-md rounded-[var(--r-lg)] border border-border bg-surface p-8">
-            <h1 className="text-2xl font-semibold">BeefTV · aihubkit</h1>
-            <p className="mb-5 mt-2 text-sm text-foreground/60">登录后进入创作工作台，可选择 aihubkit 素材库或自己的存储服务。</p>
+            <BrandLogo alt={brand.appName} className="mb-4 size-14" fallback={null} />
+            <h1 className="text-2xl font-semibold">{brand.appName}</h1>
+            <p className="mb-5 mt-2 text-sm text-foreground/60">登录后进入创作工作台，可选择 {brand.platformName} 素材库或自己的存储服务。</p>
             <Tabs activeKey={mode} onChange={(key) => { setMode(key); setError(""); form.setFieldValue("password", ""); }} items={[{ key: "login", label: "登录", disabled: busy || loadingSaved }, { key: "register", label: "注册", disabled: busy || loadingSaved }]} />
             {error && <Alert className="mb-4" type="error" showIcon title={error} />}
             {notice && <Alert className="mb-4" type="success" showIcon title={notice} />}

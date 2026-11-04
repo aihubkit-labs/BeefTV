@@ -1,3 +1,4 @@
+const brand = { apiOrigin: "https://api.customer.example", platformName: "Customer" };
 import { afterEach, expect, test } from "bun:test";
 import { isBackendURL, setHubSession } from "../src/integrations/aihubkit/api";
 import { hubModelProtocol, importHubModels } from "../src/integrations/aihubkit/catalog";
@@ -40,13 +41,13 @@ test("catalog imports preserve custom channels, defaults and explicit protocols"
     const custom = createModelChannel({ id: "custom", models: ["existing"] });
     const config = { ...defaultConfig, textModel: "custom::existing", channels: [custom] };
     const definitions = [{ value: "aihubkit-video", capability: "video", enabled: true }] as ModelProtocolDefinition[];
-    const next = importHubModels(config, "video", [{ id: "opaque", supported_endpoint_types: ["openai-video"] }], {}, definitions);
+    const next = importHubModels(config, "video", [{ id: "opaque", supported_endpoint_types: ["openai-video"] }], {}, definitions, brand);
     expect(next.channels[0]).toEqual(custom);
     expect(next.textModel).toBe("custom::existing");
     expect(next.channels[1]!.credentialRef).toBe("aihubkit:video");
     expect(next.channels[1]!.apiKey).toBe("");
     expect(hubModelProtocol({ id: "unknown-video" })).toBeUndefined();
-    expect(() => importHubModels(config, "video", [{ id: "unknown" }], {}, definitions)).toThrow("选择已安装的协议");
+    expect(() => importHubModels(config, "video", [{ id: "unknown" }], {}, definitions, brand)).toThrow("选择已安装的协议");
 });
 
 test("the active workspace sidebar exposes the aihubkit account entry", async () => {
