@@ -15,6 +15,7 @@ import { CanvasAssistantAttachments } from "./canvas-assistant-attachments";
 import { CanvasAssistantOutputs } from "./canvas-assistant-outputs";
 import { CanvasAssistantMediaFacts } from "./canvas-assistant-media-facts";
 import { AssistantReasoning } from "@/components/ai/message-reasoning";
+import { usePluginSlot } from "@/lib/plugins/slot-registry";
 import { formatAssistantDiagnostics } from "@/services/diagnostics/assistant-diagnostics";
 
 type Props = {
@@ -71,6 +72,7 @@ export function CanvasAssistantUserMessage({ text, selectedCount, continuationId
 export function CanvasAssistantTurnView({ turn, canvasId, sessionId, status, handledProposals, proposalFeedback, runningProposalIds, generationDisabled, onLocate, onUndo, onRunProposal, onDismissProposal, onContinue, nodes, onCheckResults, reasoningOpen, onReasoningOpenChange }: Props) {
     const { message } = App.useApp();
     const config = useEffectiveConfig();
+    const toolCardEntries = usePluginSlot("assistant.toolCard");
     const summary = assistantChangeSummary(turn.change);
     const changedNodeIds = assistantChangedNodeIds(turn.change);
     const changedCanvasCount = new Set(turn.change?.canvasChanges?.map(item => item.canvasId) || []).size;
@@ -99,6 +101,24 @@ export function CanvasAssistantTurnView({ turn, canvasId, sessionId, status, han
                 {(input.skills || []).map(skill => <span className="canvas-assistant-chip" key={skill.skillId}>{assistantSkillLabel(skill)}</span>)}
             </div>) : (turn.supplements || []).map((text, index) => <div key={`supplement:${index}`} className="canvas-assistant-supplement"><CanvasAssistantUserMessage text={text} selectedCount={0} /></div>)}
             <CanvasAssistantMediaFacts calls={turn.toolCalls || []} nodes={nodes} />
+            {(turn.toolCalls || []).map((call: AgentToolCall, idx: number) => {
+                const match = toolCardEntries.find((entry) => entry.payload.toolName === call.tool);
+                if (!match) return null;
+                const CardComp = match.payload.component as React.ComponentType<Record<string, unknown>>;
+                return (
+                    <div key={`${call.toolCallId || call.tool}:${idx}`} className="canvas-assistant-card">
+                        <CardComp
+                            toolName={call.tool}
+                            status={call.isError ? "failed" : "completed"}
+                            input={call.args}
+                            args={call.args}
+                            output={call.mediaFacts}
+                            result={call.mediaFacts ?? call.error}
+                            error={call.error}
+                        />
+                    </div>
+                );
+            })}
             {turn.outputs?.length ? <CanvasAssistantOutputs outputs={turn.outputs} /> : null}
             {turn.cancelled && stoppedWithChanges ? (
                 <div className="canvas-assistant-incomplete" role="status">
@@ -170,39 +190,51 @@ export function CanvasAssistantTurnView({ turn, canvasId, sessionId, status, han
                 const running = Boolean(runningProposalIds?.has(proposal.proposalId));
                 const progress = started && nodes ? assistantProposalProgress(proposal, nodes) : null;
                 const awaitingConfirmation = !started && !skipped && !undone && !turn.proposalsInvalidated;
-                const productionParts = assistantProductionProposalParts(proposal, awaitingConfirmation, config);
-                const orderTargetLines = assistantOrderTargetLines(proposal);
+                const productionParts = assistantProductionProposalParts(proposal, awaitingConfirmation);
+                const orderTargetLines = assistantOrderTargetLines(proposal, awaitingConfirmation);
                 const legacyProposalNote = !assistantVisibleReply(turn.reply || "") && proposal.note?.trim() ? proposal.note.trim() : "";
                 return (
                     <div key={proposal.proposalId} className="canvas-assistant-card">
-                        {legacyProposalNote ? <span className="canvas-assistant-proposal-note" style={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{legacyProposalNote}</span> : null}
+                        {legacyProposalNote ? (
+                            <div className="canvas-assistant-proposal-note">
+                                {legacyProposalNote.split("\n").map((part, partIndex) => <div key={partIndex} className={part.length > 80 ? "canvas-assistant-pretty-line" : undefined}>{part}</div>)}
+                            </div>
+                        ) : null}
                         {productionParts ? (
                             <>
-                                <span style={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{productionParts.header}</span>
+                                <div className="canvas-assistant-proposal-lines">
+                                    {productionParts.header.split("\n").map((part, partIndex) => <div key={partIndex} className={part.length > 80 ? "canvas-assistant-pretty-line" : undefined}>{part}</div>)}
+                                </div>
                                 {productionParts.targetLines.length > 0 ? (
                                     <details className="canvas-assistant-proposal-details">
                                         <summary>查看 {productionParts.targetLines.length} 项镜头与提示词明细</summary>
                                         <div className="canvas-assistant-proposal-targets">
                                             {productionParts.targetLines.map((line, index) => (
                                                 <div key={proposal.production?.targets[index]?.nodeId || index} className="canvas-assistant-proposal-target">
-                                                    {line}
+                                                    {line.split("\n").map((part, partIndex) => <div key={partIndex} className={part.length > 80 ? "canvas-assistant-pretty-line" : undefined}>{part}</div>)}
                                                 </div>
                                             ))}
                                         </div>
                                     </details>
                                 ) : null}
-                                {productionParts.footer ? <span className="canvas-assistant-meta" style={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{productionParts.footer}</span> : null}
+                                {productionParts.footer ? (
+                                    <div className="canvas-assistant-meta canvas-assistant-proposal-lines">
+                                        {productionParts.footer.split("\n").map((part, partIndex) => <div key={partIndex} className={part.length > 80 ? "canvas-assistant-pretty-line" : undefined}>{part}</div>)}
+                                    </div>
+                                ) : null}
                             </>
                         ) : (
                             <>
-                                <span style={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{assistantProposalText(proposal, portraitPriceLines(profile?.videoPricing), awaitingConfirmation, config)}</span>
+                                <div className="canvas-assistant-proposal-lines">
+                                    {assistantProposalText(proposal, portraitPriceLines(profile?.videoPricing), awaitingConfirmation).split("\n").map((part, partIndex) => <div key={partIndex} className={part.length > 80 ? "canvas-assistant-pretty-line" : undefined}>{part}</div>)}
+                                </div>
                                 {orderTargetLines.length > 0 ? (
                                     <details className="canvas-assistant-proposal-details">
                                         <summary>查看 {orderTargetLines.length} 项生成单明细</summary>
                                         <div className="canvas-assistant-proposal-targets">
                                             {orderTargetLines.map((line, index) => (
                                                 <div key={proposal.targets?.[index]?.nodeId || index} className="canvas-assistant-proposal-target">
-                                                    {line}
+                                                    {line.split("\n").map((part, partIndex) => <div key={partIndex} className={part.length > 80 ? "canvas-assistant-pretty-line" : undefined}>{part}</div>)}
                                                 </div>
                                             ))}
                                         </div>

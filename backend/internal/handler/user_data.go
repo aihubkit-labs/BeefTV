@@ -146,7 +146,28 @@ func registerUserDataRoutes(r *gin.RouterGroup, owners workspaceOwners, canvasDa
 			failService(c, err)
 			return
 		}
-		ok(c, gin.H{"usage": usage})
+		ok(c, gin.H{"usage": usage, "canvasDocumentMB": canvasData.CanvasDocumentLimitMB()})
+	})
+	r.PATCH("/resources/storage-usage", func(c *gin.Context) {
+		user, err := currentUser(c, owners)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+		var req struct {
+			CanvasDocumentMB *int64 `json:"canvasDocumentMB"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.CanvasDocumentMB == nil {
+			fail(c, http.StatusBadRequest, kernel.BadAuthRequest("请填写有效的单画布容量上限"))
+			return
+		}
+		limitMB, err := canvasData.UpdateCanvasDocumentLimitMBBy(user.ID, *req.CanvasDocumentMB)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"canvasDocumentMB": limitMB})
 	})
 	r.DELETE("/resources/playback-cache", func(c *gin.Context) {
 		user, err := currentUser(c, owners)
@@ -279,6 +300,18 @@ func registerUserDataRoutes(r *gin.RouterGroup, owners workspaceOwners, canvasDa
 		if usePlayback {
 			serveETag = playbackResponseETag(etag)
 		}
+		rangeHeader := c.GetHeader("Range")
+		if ifRange := strings.TrimSpace(c.GetHeader("If-Range")); ifRange != "" && ifRange != serveETag {
+			rangeHeader = ""
+		}
+		if stream == nil {
+			stream, err = resources.OpenRange(user.ID, resource.ID, rangeHeader)
+			if err != nil {
+				failService(c, err)
+				return
+			}
+			defer stream.Body.Close()
+		}
 		// 资源 ID 内容不可变（上传永远生成新 ID，不会原地覆盖）：图片可以放心交给浏览器
 		// 磁盘强缓存 30 天，大画布二次打开零请求直读磁盘缓存。视频/音频涉及转码副本
 		// 就绪与 Range 语义，保持逐次条件请求（304）。
@@ -297,18 +330,6 @@ func registerUserDataRoutes(r *gin.RouterGroup, owners workspaceOwners, canvasDa
 		if ifNoneMatch(c.GetHeader("If-None-Match"), serveETag) {
 			c.Status(http.StatusNotModified)
 			return
-		}
-		rangeHeader := c.GetHeader("Range")
-		if ifRange := strings.TrimSpace(c.GetHeader("If-Range")); ifRange != "" && ifRange != serveETag {
-			rangeHeader = ""
-		}
-		if stream == nil {
-			stream, err = resources.OpenRange(user.ID, resource.ID, rangeHeader)
-			if err != nil {
-				failService(c, err)
-				return
-			}
-			defer stream.Body.Close()
 		}
 		if resource.MimeType == "" {
 			resource.MimeType = "application/octet-stream"
@@ -663,7 +684,7 @@ func registerUserDataRoutes(r *gin.RouterGroup, owners workspaceOwners, canvasDa
 		if !available || !enforceRateLimit(c, "canvas-write:"+user.ID, policy.Request.CanvasWritePerMinute, time.Minute) {
 			return
 		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 5<<20)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, canvasData.RequestMaxBodyBytes())
 		var req struct {
 			Project json.RawMessage `json:"project"`
 		}

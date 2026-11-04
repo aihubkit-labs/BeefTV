@@ -113,6 +113,7 @@ async function startServer(dataDir: string): Promise<RunningServer> {
         stderr: "pipe",
         env: {
             ...process.env,
+            BEEFTV_INTEGRATION: "local",
             CANVAS_BACKEND_DATA_DIR: dataDir,
             CANVAS_BACKEND_ADDR: `127.0.0.1:${port}`,
             CANVAS_AUTO_MIGRATE: "true",

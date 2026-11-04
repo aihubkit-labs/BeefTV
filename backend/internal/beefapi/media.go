@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -309,17 +310,51 @@ type MediaHTTPError struct {
 
 func (e *MediaHTTPError) Error() string { return e.TaskError.Message }
 
+// MediaDiscoveryTransportError 表示 /v1/models 协议探测在收到 HTTP 响应前因网络传输失败，
+// 本次业务请求尚未发出。判断探测是否属于未发出的传输层失败只看这里。
+type MediaDiscoveryTransportError struct{ Cause error }
+
+func (e MediaDiscoveryTransportError) Error() string { return e.Cause.Error() }
+func (e MediaDiscoveryTransportError) Unwrap() error { return e.Cause }
+
+func IsDiscoveryTransportError(err error) bool {
+	var target MediaDiscoveryTransportError
+	return errors.As(err, &target)
+}
+
+func wrapDiscoveryTransportError(err error) error {
+	var httpErr *MediaHTTPError
+	var urlErr *url.Error
+	var netErr net.Error
+	if !errors.As(err, &httpErr) && (errors.As(err, &urlErr) || errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		return MediaDiscoveryTransportError{Cause: err}
+	}
+	return err
+}
+
 func (c *MediaClient) Discover(ctx context.Context) (MediaDiscovery, error) {
 	if c.discovery != nil {
 		return *c.discovery, nil
 	}
-	req, err := c.request(ctx, http.MethodGet, "/models", nil)
-	if err != nil {
-		return MediaDiscovery{}, err
+	var data []byte
+	var header http.Header
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		var req *http.Request
+		req, err = c.request(ctx, http.MethodGet, "/models", nil)
+		if err != nil {
+			return MediaDiscovery{}, err
+		}
+		data, header, err = c.send(req, 4<<20)
+		if err == nil || ctx.Err() != nil || !retryUploadControl(err) || attempt == 2 {
+			break
+		}
+		if err = uploadPause(ctx, attempt); err != nil {
+			return MediaDiscovery{}, wrapDiscoveryTransportError(err)
+		}
 	}
-	data, header, err := c.send(req, 4<<20)
 	if err != nil {
-		return MediaDiscovery{}, err
+		return MediaDiscovery{}, wrapDiscoveryTransportError(err)
 	}
 	var payload struct {
 		MediaProtocol MediaDiscovery `json:"media_protocol"`
@@ -391,7 +426,7 @@ func (c *MediaClient) Execute(ctx context.Context, request MediaRequest, refs []
 		if err != nil {
 			return nil, err
 		}
-		if !strings.HasPrefix(link, "https://") && !c.AllowHTTPTest {
+		if err := c.validURLContext(ctx, link); err != nil {
 			return nil, errors.New("媒体参考素材需要 HTTPS 链接")
 		}
 		request.Input.References = append(request.Input.References, MediaReference{Kind: ref.Kind, Role: ref.Role, URL: link})
@@ -546,7 +581,11 @@ func (c *MediaClient) wait(ctx context.Context, ref, kind string, legacy, stopWh
 }
 func (t MediaTask) failure() error {
 	if t.Error != nil {
-		return t.Error
+		err := *t.Error
+		if err.TaskID == "" {
+			err.TaskID = t.TaskID
+		}
+		return &err
 	}
-	return &MediaTaskError{Code: "media_task_failed", Category: "unknown", Message: "媒体生成失败，请保留原任务查询结算"}
+	return &MediaTaskError{Code: "media_task_failed", Category: "upstream", TaskID: t.TaskID, Message: "媒体生成失败，请保留原任务查询结算"}
 }

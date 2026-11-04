@@ -19,6 +19,7 @@ func RegisterDefaultOps(r *Registry) {
 	registerCanvasEditOps(r)
 	registerCanvasNodeBindAsset(r)
 	registerModelCatalogOp(r)
+	registerGenerationEstimateOp(r)
 	registerMediaOps(r)
 	registerSkillOps(r)
 	registerSkillMarketOps(r)
@@ -208,10 +209,15 @@ func opCanvasGenerationPropose(ctx *Context, params json.RawMessage) (any, error
 			ReferenceNodeIDs: refs,
 		})
 	}
+	orderEstimate := EstimateGenerationCost(ctx.Domain, estimateGenerationTargets(owned, fallbackTargets))
+	for i := range targetsSummary {
+		targetsSummary[i]["estimate"] = orderEstimate.Items[i]
+	}
 	approvalMode := ctx.Caller.EffectiveApprovalMode()
 	result := map[string]any{
 		"proposalId": proposalID, "orderId": proposalID, "kind": args.Kind, "nodeIds": nodeIDs,
 		"model": resolved.Display, "modelKey": resolved.ModelKey, "pricing": pricing,
+		"estimate":     orderEstimate.Summary,
 		"approvalMode": string(approvalMode), "status": string(GenerationOrderPending),
 		"note": strings.TrimSpace(args.Note), "targets": targetsSummary,
 		"source": map[string]any{"canvasId": args.CanvasID, "canvasRevision": doc["revision"], "modelConfigRevision": resolved.Revision},
@@ -232,7 +238,12 @@ func opCanvasGenerationPropose(ctx *Context, params json.RawMessage) (any, error
 			}
 		}
 		proposedTargets = targets
-		result["production"] = map[string]any{"targets": targets}
+		productionEstimate := EstimateGenerationCost(ctx.Domain, estimateGenerationTargets(owned, targets))
+		estimated := make([]estimatedGenerationTarget, len(targets))
+		for i, target := range targets {
+			estimated[i] = estimatedGenerationTarget{GenerationTarget: target, Estimate: productionEstimate.Items[i]}
+		}
+		result["production"] = map[string]any{"targets": estimated, "estimate": productionEstimate.Summary}
 	}
 	_, hasOrderRecorder := ctx.Domain.(GenerationOrderRecorder)
 	if len(proposedTargets) == 0 {
@@ -525,9 +536,10 @@ func opCanvasNodeUpdate(ctx *Context, params json.RawMessage) (any, error) {
 		NodeID           string `json:"nodeId"`
 		ExpectedRevision int64  `json:"expectedRevision"`
 		Patch            struct {
-			Title   *string `json:"title"`
-			Prompt  *string `json:"prompt"`
-			Content *string `json:"content"`
+			Title      *string        `json:"title"`
+			Prompt     *string        `json:"prompt"`
+			Content    *string        `json:"content"`
+			PluginData map[string]any `json:"pluginData"`
 		} `json:"patch"`
 	}
 	if err := decodeParams(params, &args); err != nil {
@@ -549,6 +561,9 @@ func opCanvasNodeUpdate(ctx *Context, params json.RawMessage) (any, error) {
 	if args.Patch.Content != nil {
 		patch["content"] = *args.Patch.Content
 	}
+	if args.Patch.PluginData != nil {
+		patch["pluginData"] = args.Patch.PluginData
+	}
 	if len(patch) == 0 {
 		return nil, InvalidArg("empty_patch", "patch 至少要有一个字段")
 	}
@@ -568,6 +583,9 @@ func opCanvasNodesCreate(ctx *Context, params json.RawMessage) (any, error) {
 			Title  string `json:"title"`
 			Type   string `json:"type"`
 			Prompt string `json:"prompt"`
+			// Plugin tools pass their node data here; it stays out of the
+			// model-facing schema so the assistant's tool definitions do not grow.
+			PluginData map[string]any `json:"pluginData"`
 		} `json:"nodes"`
 	}
 	if err := decodeParams(params, &args); err != nil {
@@ -581,7 +599,7 @@ func opCanvasNodesCreate(ctx *Context, params json.RawMessage) (any, error) {
 	}
 	drafts := make([]canvas.NodeDraft, 0, len(args.Nodes))
 	for _, node := range args.Nodes {
-		drafts = append(drafts, canvas.NodeDraft{Title: node.Title, Type: node.Type, Prompt: node.Prompt})
+		drafts = append(drafts, canvas.NodeDraft{Title: node.Title, Type: node.Type, Prompt: node.Prompt, PluginData: node.PluginData})
 	}
 	_, createdNodes, err := ctx.Domain.CreateUserCanvasNodes(ctx.UserID, args.CanvasID, drafts, args.ExpectedRevision)
 	if err != nil {

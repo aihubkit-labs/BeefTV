@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/beefapi"
+	"infinite-canvas/backend/internal/providerpreset"
 )
 
 // Managed connections expose content intent, never a supplier request body.
@@ -85,7 +86,7 @@ func executeManagedMedia(ctx context.Context, client *beefapi.MediaClient, reque
 		if beefapi.IsDefiniteMediaRejection(err) {
 			return nil, err
 		}
-		if sent, lookupErr := runtime.ManagedMedia.Sent(ctx); lookupErr == nil && sent {
+		if sent, lookupErr := runtime.ManagedMedia.Sent(ctx); lookupErr != nil || sent {
 			return nil, SubmissionUnknownError{Cause: err}
 		}
 		return nil, RequestPreparationError{Cause: err}
@@ -140,10 +141,15 @@ func managedImageOptions(input Input) map[string]any {
 	if config.SeedreamOptimize != "" {
 		options["optimize_prompt_options"] = map[string]any{"mode": config.SeedreamOptimize}
 	}
-	if config.SeedreamWatermark != "" {
+	if providerpreset.SeedreamFamily(config.Model) != "" {
 		options["watermark"] = config.SeedreamWatermark == "true"
 	}
 	return options
+}
+
+// ManagedImageSizeAndQuality 返回托管图片请求实际发送的尺寸和画质，费用估算据此取同一个计费档位。
+func ManagedImageSizeAndQuality(profile *ImageCapabilityConfig, size, quality string) (string, string) {
+	return managedImageSize(profile, size), managedImageQuality(profile, quality)
 }
 
 // managedImageQuality 只发送模型目录声明支持的画质；不支持或不在可选值里时交给服务端默认值。

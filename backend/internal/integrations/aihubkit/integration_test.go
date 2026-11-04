@@ -122,14 +122,42 @@ func TestUploadUsesGeneralFileTypesAndNoAccountCredentialsAtObjectStore(t *testi
 	}
 }
 
-func TestUploadRejectsPrivateTargetsAndExpiredBatches(t *testing.T) {
-	c := newClient()
-	c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"success":true,"data":{"upload_url":"https://127.0.0.1/private","url":"https://8.8.8.8/get","expires_in":600}}`))}, nil
-	})}
-	if _, _, err := c.upload(context.Background(), "secret", "file", "video/mp4", 1, strings.NewReader("a")); err == nil {
-		t.Fatal("accepted private upload target")
+func TestUploadFollowsOutboundAddressPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, allowPrivate, uploadURL, readURL string
+		allowed                                bool
+	}{
+		{"local allowed", "true", "http://127.0.0.1/put", "http://127.0.0.1/get", true},
+		{"strict upload", "false", "https://127.0.0.1/put", "https://8.8.8.8/get", false},
+		{"strict read", "false", "https://8.8.8.8/put", "https://127.0.0.1/get", false},
+		{"public HTTPS", "false", "https://8.8.8.8/put", "https://8.8.8.8/get", true},
+		{"link local", "true", "http://169.254.169.254/put", "https://8.8.8.8/get", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", tc.allowPrivate)
+			t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "")
+			c := newClient()
+			c.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				ticket, _ := json.Marshal(map[string]any{"success": true, "data": uploadTicket{UploadURL: tc.uploadURL, URL: tc.readURL, ExpiresIn: 600}})
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(ticket)))}, nil
+			})}
+			putCalled := false
+			c.uploadHTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				putCalled = true
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})
+			link, _, err := c.upload(context.Background(), "secret", "file", "video/mp4", 1, strings.NewReader("a"))
+			if (err == nil) != tc.allowed || putCalled != tc.allowed {
+				t.Fatalf("allowed=%v put=%v err=%v", tc.allowed, putCalled, err)
+			}
+			if tc.allowed && link != tc.readURL {
+				t.Fatal("read URL changed")
+			}
+		})
 	}
+}
+
+func TestUploadRejectsExpiredReferenceBatches(t *testing.T) {
 	s := &accountStorage{account: &account{}, expiresAt: time.Now().Add(5 * time.Second)}
 	if s.ValidateReferences(context.Background()) == nil {
 		t.Fatal("accepted an expiring earlier reference")

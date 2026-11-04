@@ -13,6 +13,7 @@ import { defaultModelCapabilityConfig, upgradeGPTImageCapability, workflowFieldR
 import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec } from "@/services/api/logical-models";
 import { seedancePortraitLabel, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
+import { upgradeLL2ModelProfile } from "../../../plugin-packages/beeftv-plugin-ll2/client/index.js";
 export { buildApiUrl, isSystemProxyBaseUrl, resolveBackendApiUrl, systemProxyChannelId } from "@/lib/channel-url";
 
 export type ApiCallFormat = "openai" | "gemini" | "claude";
@@ -486,6 +487,7 @@ export const defaultConfig: AiConfig = {
     quality: "auto",
     size: "1:1",
     transparentBackground: "false",
+    seedreamWatermark: "false",
     count: "1",
     canvasImageCount: "1",
 };
@@ -850,11 +852,10 @@ function protocolAllowsCapability(protocol: ModelProtocol | undefined, capabilit
 function reconcileChannelModelProfiles(channel: ModelChannel): ModelChannel {
     if (!channel.modelProfiles?.length) return channel;
     let changed = false;
-    const modelProfiles = channel.modelProfiles.map((profile) => {
-        const capability = modelProtocolCapability(profile.protocol);
-        if (!capability || capability === profile.capability) return profile;
-        changed = true;
-        return { ...profile, capability };
+    const modelProfiles = channel.modelProfiles.map((raw) => {
+        const profile = (upgradeLL2ModelProfile(raw) as typeof raw) || raw, capability = modelProtocolCapability(profile.protocol);
+        if (profile !== raw) changed = true;
+        return !capability || capability === profile.capability ? profile : ((changed = true), { ...profile, capability });
     });
     return changed ? { ...channel, modelProfiles } : channel;
 }
@@ -895,15 +896,14 @@ function beefApiSeedanceCapabilityConfig(model: string, current?: ModelCapabilit
     if (!current || !video) return defaults;
     // The built-in BeefAPI Seedance contract supports the audio switch even
     // when an older saved profile advertised no control. Keep its default.
-    const generateAudio = { ...video!.generateAudio, supported: true };
-    if (!legacy) return { ...current, video: { ...video!, generateAudio, ...(defaults.video?.draft ? { draft: video!.draft ?? defaults.video.draft } : {}) } };
+    const generateAudio = { ...video!.generateAudio, supported: true }, draftSupported = Boolean(video!.draft?.supported ?? defaults.video?.draft?.supported);
+    const baseRes = Array.isArray(video!.resolutions) ? video!.resolutions : defaults.video?.resolutions ?? [], baseOps = Array.isArray(video!.operations) ? video!.operations : defaults.video?.operations ?? [];
+    const resolutions = draftSupported && !baseRes.some((item) => String(item).toLowerCase() === "480p") ? ["480p", ...baseRes] : baseRes;
+    const operations = draftSupported && defaults.video?.operations?.includes("draft_to_final") && !baseOps.includes("draft_to_final") ? [...baseOps, "draft_to_final"] : baseOps;
+    const flags = { resolutions, operations, ...(defaults.video?.draft ? { draft: video!.draft ?? defaults.video.draft } : {}), ...(defaults.video?.returnLastFrame ? { returnLastFrame: video!.returnLastFrame ?? defaults.video.returnLastFrame } : {}) };
+    if (!legacy) return { ...current, video: { ...video!, generateAudio, ...flags } };
     const next = defaults.video!;
-    return { ...current, video: { ...video!, generateAudio, ...(next.draft ? { draft: video!.draft ?? next.draft } : {}), operations: next.operations, references: { ...refs!,
-        maxImages: next.references.maxImages,
-        maxVideos: next.references.maxVideos, maxAudios: next.references.maxAudios,
-        maxVideoDurationSeconds: next.references.maxVideoDurationSeconds,
-        maxAudioDurationSeconds: next.references.maxAudioDurationSeconds,
-    } } };
+    return { ...current, video: { ...video!, generateAudio, ...flags, operations: next.operations, references: { ...refs!, maxImages: next.references.maxImages, maxVideos: next.references.maxVideos, maxAudios: next.references.maxAudios, maxVideoDurationSeconds: next.references.maxVideoDurationSeconds, maxAudioDurationSeconds: next.references.maxAudioDurationSeconds } } };
 }
 
 function enrichBeefApiMediaChannel(channel: ModelChannel): ModelChannel {
