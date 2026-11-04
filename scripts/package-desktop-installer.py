@@ -44,6 +44,7 @@ def package(version, platform, payload, output):
             subprocess.run([compiler, '-INPUTCHARSET', 'UTF8', f'-DPAYLOAD={payload}', f'-DOUTPUT={output}',
                             f'-DROOTFILES={manifest}', f'-DVERSION={version[1:]}',
                             f'-DINSTALLNAME={INSTALL_NAME}', f'-DPRODUCTNAME={nsis_string(PRODUCT_NAME)}', f'-DPACKAGEID={PACKAGE_ID}',
+                            f'-DSHORTCUTNAME={nsis_string(ARTIFACT_NAME)}',
                             str(ROOT / 'scripts/installers/windows.nsi')], check=True)
     else:
         with tempfile.TemporaryDirectory(prefix='beeftv-deb-') as directory:

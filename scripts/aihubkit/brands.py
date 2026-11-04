@@ -132,6 +132,8 @@ def environment(directory):
         'infinite-canvas/backend/internal/buildinfo.DataDirectory': install,
     }
     return {
+        # Windows runners otherwise encode piped Python output as cp1252.
+        'PYTHONUTF8': '1',
         'BEEFTV_RELEASE_VERSION': (ROOT / 'AIHUBKIT_VERSION').read_text().strip(),
         'BEEFTV_EXTRA_LDFLAGS': ' '.join('-X '+k+'='+v for k, v in flags.items()),
         'BEEFTV_PRODUCT_NAME': brand['appName'], 'BEEFTV_ARTIFACT_NAME': brand['artifactName'],

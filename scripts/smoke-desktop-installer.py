@@ -400,9 +400,9 @@ def smoke(args):
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf'Software\Microsoft\Windows\CurrentVersion\Uninstall\{INSTALL_NAME}') as key:
                     assert winreg.QueryValueEx(key, 'InstallLocation')[0] == str(installed)
                 menu = Path(os.environ['APPDATA']) / f'Microsoft/Windows/Start Menu/Programs/{INSTALL_NAME}'
-                assert (menu / f'{INSTALL_NAME}.lnk').is_file()
+                assert (menu / f'{ARTIFACT_NAME}.lnk').is_file()
                 assert (menu / 'Uninstall.lnk').is_file()
-                desktop = Path(os.environ['USERPROFILE']) / f'Desktop/{INSTALL_NAME}.lnk'
+                desktop = Path(os.environ['USERPROFILE']) / f'Desktop/{ARTIFACT_NAME}.lnk'
                 assert desktop.is_file()
             def uninstall():
                 # Normal NSIS uninstall runs a temporary copy so it can delete itself.

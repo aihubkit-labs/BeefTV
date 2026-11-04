@@ -8,6 +8,9 @@
 !ifndef PACKAGEID
 !define PACKAGEID "beeftv"
 !endif
+!ifndef SHORTCUTNAME
+!define SHORTCUTNAME "${INSTALLNAME}"
+!endif
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "StrFunc.nsh"
@@ -483,10 +486,17 @@ Section "${INSTALLNAME} (required)" SEC_APP
   Abort
   install_registered:
   SetOutPath "$INSTDIR"
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "ShortcutName"
+  ${If} $0 != ""
+  ${AndIf} $0 != "${SHORTCUTNAME}"
+    Delete "$DESKTOP\$0.lnk"
+    Delete "$SMPROGRAMS\${INSTALLNAME}\$0.lnk"
+  ${EndIf}
   CreateDirectory "$SMPROGRAMS\${INSTALLNAME}"
-  CreateShortcut "$SMPROGRAMS\${INSTALLNAME}\${INSTALLNAME}.lnk" "$INSTDIR\${INSTALLNAME}.exe"
+  CreateShortcut "$SMPROGRAMS\${INSTALLNAME}\${SHORTCUTNAME}.lnk" "$INSTDIR\${INSTALLNAME}.exe"
   CreateShortcut "$SMPROGRAMS\${INSTALLNAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\${INSTALLNAME}.lnk" "$INSTDIR\${INSTALLNAME}.exe"
+  CreateShortcut "$DESKTOP\${SHORTCUTNAME}.lnk" "$INSTDIR\${INSTALLNAME}.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "ShortcutName" "${SHORTCUTNAME}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "DisplayName" "${PRODUCTNAME}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
@@ -531,8 +541,8 @@ Section "Uninstall"
     ${If} $0 == '$\"$INSTDIR\${INSTALLNAME}.exe$\" $\"%1$\"'
       DeleteRegKey HKCU "Software\Classes\${PACKAGEID}"
     ${EndIf}
-    Delete "$DESKTOP\${INSTALLNAME}.lnk"
-    Delete "$SMPROGRAMS\${INSTALLNAME}\${INSTALLNAME}.lnk"
+    Delete "$DESKTOP\${SHORTCUTNAME}.lnk"
+    Delete "$SMPROGRAMS\${INSTALLNAME}\${SHORTCUTNAME}.lnk"
     Delete "$SMPROGRAMS\${INSTALLNAME}\Uninstall.lnk"
     RMDir "$SMPROGRAMS\${INSTALLNAME}"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLNAME}"

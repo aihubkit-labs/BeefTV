@@ -27,6 +27,10 @@ test("brand refresh updates managed destinations and names without altering inde
     expect(next.channels[1]).toMatchObject({ name: "新名称 · group", baseUrl: "https://new-api.example", credentialRef: "aihubkit:group" });
     expect(next.textModel).toBe(imported.textModel);
     expect(synchronizeHubModelBrand(next, { apiOrigin: "https://new-api.example", platformName: "新名称" })).toBe(next);
+    const renamed = { ...imported, channels: imported.channels.map((channel) => ({ ...channel, name: "My group" })) };
+    expect(synchronizeHubModelBrand(renamed, { apiOrigin: "https://new-api.example", platformName: "新名称" }).channels[1]).toMatchObject({
+        name: "My group", baseUrl: "https://new-api.example",
+    });
 });
 
 test.each(["catalog", "manual"] as const)("%s video protocol imports are selectable immediately and after reload", (selection) => {

@@ -20,6 +20,7 @@ description: Fork 的平台登录、账号工作区与通用参考文件存储
 ```bash
 python3 -m pip install Pillow==11.3.0
 python3 scripts/aihubkit/brands.py snapshot --brand zmodel --output .local/brand-snapshots
+sh plugin-packages/build-packages.sh
 python3 scripts/aihubkit/brands.py build --snapshot .local/brand-snapshots/zmodel --target darwin/arm64
 ```
 

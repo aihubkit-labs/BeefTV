@@ -6,7 +6,9 @@ export function synchronizeHubModelBrand(config: AiConfig, brand: { apiOrigin: s
     let changed = false;
     const channels = config.channels.map((channel) => {
         if (!channel.credentialRef?.startsWith("aihubkit:")) return channel;
-        const name = `${brand.platformName} · ${channel.credentialRef.slice("aihubkit:".length)}`;
+        const suffix = ` · ${channel.credentialRef.slice("aihubkit:".length)}`;
+        // Keep explicit user names while refreshing the generated platform label.
+        const name = channel.name.endsWith(suffix) ? brand.platformName + suffix : channel.name;
         if (channel.baseUrl === brand.apiOrigin && channel.name === name) return channel;
         changed = true;
         return { ...channel, baseUrl: brand.apiOrigin, name };
