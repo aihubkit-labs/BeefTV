@@ -162,7 +162,11 @@ def build(directory, target):
         config.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding='utf-8')
         env = dict(os.environ, **values, BEEFTV_WAILS_PLATFORM=target)
         if target == 'windows/amd64':
-            command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'scripts/build-beeftv-windows-release.ps1')]
+            shell = shutil.which('pwsh') or 'powershell'
+            # Python does not perform pwsh's WinPS module-path normalization.
+            if shell == 'powershell':
+                env.pop('PSModulePath', None)
+            command = [shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'scripts/build-beeftv-windows-release.ps1')]
         else:
             command = ['bash', str(ROOT / 'scripts/build-beeftv-release.sh')]
         subprocess.run(command, env=env, cwd=ROOT, check=True)

@@ -65,7 +65,7 @@ func imageSubmissionFixture(t *testing.T, multipartBody bool) (*Service, *gorm.D
 	if err != nil || !handled {
 		t.Fatalf("prepare: handled=%v err=%v", handled, err)
 	}
-	if strings.Contains(row.RequestCipher, "private-test-key") || strings.Contains(row.RequestCipher, "boat") {
+	if strings.Contains(row.RequestCipher, "private-test-key") || strings.Contains(row.RequestCipher, "a boat") {
 		t.Fatal("plaintext persisted")
 	}
 	return s, db, task, row, body

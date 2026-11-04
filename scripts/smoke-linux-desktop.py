@@ -4,11 +4,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
 import zipfile
-from desktop_product import LINUX_BUNDLE
+from desktop_product import LINUX_BUNDLE, PRODUCT_NAME
 
 
 def smoke(archive):
@@ -37,7 +38,7 @@ def smoke(archive):
                         log.seek(0)
                         raise RuntimeError("desktop exited: " + log.read()[-4000:])
                     descriptor = data / "runtime.json"
-                    window = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^BeefTV$"], capture_output=True, text=True)
+                    window = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^" + re.escape(PRODUCT_NAME) + "$"], capture_output=True, text=True)
                     if descriptor.exists() and window.returncode == 0:
                         info = json.loads(descriptor.read_text())
                         if info["pid"] != process.pid:

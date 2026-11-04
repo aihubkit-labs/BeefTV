@@ -141,5 +141,7 @@ jobs:
           fi
           # Retrying a failed upload may replace assets only while still a draft.
           gh release upload "$RELEASE_TAG" dist/* --clobber
+          python scripts/aihubkit/verify_uploaded_assets.py --tag "$RELEASE_TAG" --assets-dir dist --notes "$RUNNER_TEMP/release-notes.md"
+          gh release upload "$RELEASE_TAG" dist/SHA256SUMS.txt --clobber
           gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md" --draft=false
           echo "Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
