@@ -15,14 +15,40 @@ description: Fork 的平台登录、账号工作区与通用参考文件存储
 
 每次正式发布覆盖运营清单中的所有品牌、四种桌面目标和对应便携 ZIP。清单只存稳定 ID 与专属域名，名称、API 地址和图标由接口决定。预检一次冻结全部品牌快照和图标，各平台复用该快照。名称重复、元数据或图标获取失败、任一平台验收失败或发布资产缺失时，工作流不会公开 Release。
 
-单品牌验收可运行以下命令；它不替代正式发布的全量清单检查：
+本地打包统一使用 `scripts/aihubkit/build.py`，自动识别本机系统和架构，默认读取运营清单中的全部品牌。在仓库根目录运行：
 
 ```bash
-python3 -m pip install Pillow==11.3.0
-python3 scripts/aihubkit/brands.py snapshot --brand zmodel --output .local/brand-snapshots
-sh plugin-packages/build-packages.sh
-python3 scripts/aihubkit/brands.py build --snapshot .local/brand-snapshots/zmodel --target darwin/arm64
+python3 scripts/aihubkit/build.py
 ```
+
+Windows 在 PowerShell 中运行同一个文件：
+
+```powershell
+python scripts/aihubkit/build.py
+```
+
+| 运行系统 | 自动选择的目标 | 安装包 |
+| --- | --- | --- |
+| macOS / Apple Silicon | `darwin-arm64` | `.dmg` |
+| macOS / Intel | `darwin-amd64` | `.dmg` |
+| Windows / x64 | `windows-amd64` | `-setup.exe` |
+| Ubuntu 24.04 / x64 | `linux-amd64` | `.deb` |
+
+首次运行前安装 Python 3.9 或更新版本、Bun、Go、Git 和对应版本的 Node.js。Go 版本以 `backend/go.mod` 为准，Node 版本以 `scripts/package-agent-host.mjs` 为准。macOS/Linux 会查找 GVM/NVM 中对应的已安装版本，也支持 `BEEFTV_GO_DIR`、`BEEFTV_NODE_RUNTIME`；Node 运行时目录在 Unix 下包含 `bin/node`，Windows 下包含 `node.exe`。
+
+各系统还需准备以下原生工具，入口会预检，缺少时停止并提示：
+
+- macOS：Xcode Command Line Tools（`xcode-select --install`）。
+- Windows：PowerShell、NSIS、MSYS2 UCRT64。在 MSYS2 UCRT64 终端中运行 `pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils zip`。默认使用 `C:/msys64/ucrt64`，其他安装位置通过 `MSYSTEM_PREFIX` 指定对应的 Windows 绝对路径。NSIS 默认路径为 `C:/Program Files (x86)/NSIS`，其他位置须加入 PATH。正式运行入口使用原生 Windows Python 和 PowerShell。应用安装运行需 WebView2。
+- Ubuntu 24.04：运行 `sudo apt-get install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev python3-venv git zip`。当前 DEB 依赖以该发行版为基准，不支持在其他 Linux 发行版直接运行此入口。
+
+Python 图标依赖自动装入 `.local/brand-build-venv`。入口准备 Go/Web 依赖，在临时目录调用官方插件打包脚本，再按品牌调用官方原生构建和安装器脚本。macOS/Linux 保留官方本地发布检查；Windows 使用官方 PowerShell 构建入口及 CGO 工具链检查。安装包分别执行 DMG 镜像、PE 文件结构、DEB 元信息检查，实际安装、登录与模型调用另需在对应系统验收。
+
+成功输出到 `dist/aihubkit/<版本>-<平台>-<本次构建时间>/`，包含全部品牌的本机安装包、品牌快照、媒体组件源码包和 `SHA256SUMS.txt`。已下载的 WASM 源码按官方锁文件校验，存于 `.local/cache/ffmpeg-wasm-sources`；连接中断、超时或临时 HTTP 错误最多尝试三次。重新运行会复用有效缓存；源码校验失败或证书错误直接停止。每次使用独立输出目录，同一版本可以重新打包。
+
+任一品牌失败即停止，部分产物保留在 `.partial` 目录，不生成完整校验清单。入口拒绝覆盖 `backend/cmd/desktop/build/bin` 已有产物；如有旧产物，先移走需要保留的文件或使用干净的 worktree。构建后清理本次临时应用，不更新已安装的应用，不上传 GitHub 或创建标签。
+
+追加 `--check` 只检查本机工具链和运营清单，不下载品牌信息或生成安装包；追加 `--brand zmodel` 仅用于单品牌开发验收。该入口只生成本机系统和架构的安装包，不跨系统编译，不替代正式发布的全平台安装包、便携 ZIP 和原生安装验收。
 
 构建入口复用官方脚本、插件、助手运行时和许可证处理。原生构建仍需对应系统和工具链。正式发版前先把功能、运营清单、`AIHUBKIT_VERSION`、`AIHUBKIT_CHANGELOG.md` 合并到远端 `origin/main`，刷新引用并运行 `bash scripts/aihubkit/verify-release-main.sh <发布提交>`，再为该提交创建新的 `aihubkit-v*` 标签。已推送标签不可移动或复用。当前独立发行不使用官方自动更新源；升级下载安装对应品牌的新版。
 
@@ -68,7 +94,7 @@ python3 scripts/aihubkit/brands.py build --snapshot .local/brand-snapshots/zmode
 
 入口依次确认工具链、下载 Go 依赖、按 `web/bun.lock` 安装前端依赖、从当前源码生成全部协议插件包，再调用官方 `scripts/update-local-beeftv-app.sh` 完成检查、编译、打包、签名校验和本机安装。插件包是 Git 忽略的构建产物，新 worktree 无需从其他工作区复制。
 
-运行前需安装 Go、Bun 和 Xcode Command Line Tools。Go 版本要求以 `backend/go.mod` 为准，入口默认使用 `GOTOOLCHAIN=auto` 下载并选择所需版本；显式设置 `GOTOOLCHAIN=local` 时仍遵守该设置，本机版本不足会终止。可用 `BEEFTV_GO_DIR` 指定 Go 安装目录。
+运行前需安装 Python 3.9 或更新版本、Go、Bun 和 Xcode Command Line Tools。依赖及插件准备与品牌打包共用 `scripts/aihubkit/build.py` 的实现。Go 版本要求以 `backend/go.mod` 为准，入口默认使用 `GOTOOLCHAIN=auto` 下载并选择所需版本；显式设置 `GOTOOLCHAIN=local` 时仍遵守该设置，本机版本不足会终止。可用 `BEEFTV_GO_DIR` 指定 Go 安装目录。
 
 Node 运行时复用 `scripts/package-agent-host.mjs` 的版本、平台和架构校验。默认从当前 `node` 命令解析运行时目录；需要指定时，将 `BEEFTV_NODE_RUNTIME` 设置为包含 `bin/node` 的官方 Node 安装目录。入口会将这个目录加入构建进程的 PATH，避免检查和打包使用不同 Node。助手依赖仍由官方打包脚本依据 `agent-host/bun.lock` 在独立暂存目录安装。
 

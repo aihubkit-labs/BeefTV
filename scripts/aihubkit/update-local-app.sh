@@ -22,7 +22,7 @@ fi
 if [[ -n "${BEEFTV_NODE_RUNTIME:-}" ]]; then
   export PATH="$BEEFTV_NODE_RUNTIME/bin:$PATH"
 fi
-for tool in go node bun zip unzip rsync xcrun codesign; do
+for tool in go node bun python3 bash zip rsync xcrun codesign; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Required build tool is missing: $tool" >&2; exit 1; }
 done
 
@@ -39,42 +39,8 @@ export PATH="$BEEFTV_NODE_RUNTIME/bin:$PATH"
 echo "Checking build toolchains"
 xcrun --find clang >/dev/null
 bun "$ROOT_DIR/scripts/package-agent-host.mjs" "$TARGET" --verify-runtime
-(
-  cd "$ROOT_DIR/backend"
-  go version
-  go mod download
-)
-
-echo "Installing locked frontend dependencies"
-(
-  cd "$ROOT_DIR/web"
-  bun install --frozen-lockfile
-)
-
-echo "Building protocol packages from current sources"
-mkdir -p "$ROOT_DIR/.local/cache"
-PLUGIN_STAGE="$(mktemp -d "$ROOT_DIR/.local/cache/aihubkit-plugins.XXXXXX")"
-trap 'rm -rf -- "$PLUGIN_STAGE"' EXIT
-# The upstream packager embeds documentation into manifests. Run it on a fresh
-# copy so generated documentation never rewrites the checkout's plugin sources.
-rsync -a --exclude='*.beeftv-plugin' --exclude='*.tmp' \
-  "$ROOT_DIR/plugin-packages/" "$PLUGIN_STAGE/plugin-packages/"
-sh "$PLUGIN_STAGE/plugin-packages/build-packages.sh"
-shopt -s nullglob
-manifests=("$PLUGIN_STAGE/plugin-packages/"*/manifest.json)
-packages=("$PLUGIN_STAGE/plugin-packages/"*.beeftv-plugin)
-if [[ ${#manifests[@]} -eq 0 || ${#packages[@]} -ne ${#manifests[@]} ]]; then
-  echo "Protocol package generation is incomplete." >&2
-  exit 1
-fi
-for manifest in "${manifests[@]}"; do
-  package_dir="${manifest%/manifest.json}"
-  unzip -tqq "$PLUGIN_STAGE/plugin-packages/${package_dir##*/}.beeftv-plugin"
-done
-# Only generated archives are synchronized/deleted; excluded source directories
-# stay untouched. A removed plugin must not survive in the app via an old archive.
-rsync -a --checksum --delete --include='*.beeftv-plugin' --exclude='*' \
-  "$PLUGIN_STAGE/plugin-packages/" "$ROOT_DIR/plugin-packages/"
+echo "Preparing dependencies and current protocol packages"
+python3 "$ROOT_DIR/scripts/aihubkit/build.py" --prepare-only
 
 echo "Checking, building and updating the local app"
 "$ROOT_DIR/scripts/update-local-beeftv-app.sh"

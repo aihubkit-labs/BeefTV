@@ -16,6 +16,9 @@ function fixture(t) {
   }
   const put = (name, source) => writeFileSync(path.join(root, name), source, { mode: 0o755 });
   copyFileSync(path.join(repo, 'scripts/aihubkit/update-local-app.sh'), path.join(root, 'scripts/aihubkit/update-local-app.sh'));
+  for (const name of ['build.py', 'brands.py']) {
+    copyFileSync(path.join(repo, 'scripts/aihubkit', name), path.join(root, 'scripts/aihubkit', name));
+  }
   for (const name of ['build-packages.sh', 'embed-documentation.mjs']) {
     copyFileSync(path.join(repo, 'plugin-packages', name), path.join(root, 'plugin-packages', name));
   }
