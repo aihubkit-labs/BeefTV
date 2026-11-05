@@ -187,7 +187,7 @@ jobs:
           artifact="${BEEFTV_ARTIFACT_NAME:-BeefTV}"
           payload='backend/cmd/desktop/build/bin'
           suffix='-setup.exe'
-          if [[ "$platform" == darwin-* ]]; then payload="$payload/$product.app"; suffix='.dmg'; fi
+          if [[ "$platform" == darwin-* ]]; then payload="$payload/${BEEFTV_PRODUCT_NAME:-BeefTV}.app"; suffix='.dmg'; fi
           if [[ "$platform" == linux-* ]]; then payload="$payload/$product-linux"; suffix='.deb'; fi
           command=(python scripts/smoke-desktop-installer.py --platform "$platform" --installer "dist/${artifact}-${version}-${platform}${suffix}" --payload "$payload")
           if [[ "$platform" == linux-* ]]; then xvfb-run -a dbus-run-session -- "${command[@]}"; else "${command[@]}"; fi
@@ -213,7 +213,7 @@ jobs:
           payload='cmd/desktop/build/bin'
           product="${BEEFTV_INSTALL_NAME:-BeefTV}"
           artifact="${BEEFTV_ARTIFACT_NAME:-BeefTV}"
-          if [[ "$platform" == darwin-* ]]; then payload="$payload/$product.app"; fi
+          if [[ "$platform" == darwin-* ]]; then payload="$payload/${BEEFTV_PRODUCT_NAME:-BeefTV}.app"; fi
           if [[ "$platform" == linux-* ]]; then payload="$payload/$product-linux"; fi
           (
             cd backend

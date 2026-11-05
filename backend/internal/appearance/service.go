@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/kernel"
 	"infinite-canvas/backend/internal/model"
 
@@ -38,7 +39,10 @@ func (s *Service) Public() (*PublicSetting, error) {
 func (s *Service) Identity() (string, string) {
 	_, value, err := s.read()
 	if err != nil || strings.TrimSpace(value.BrandName) == "" {
-		return DefaultBrandName, DefaultBrandSlug
+		return buildinfo.DisplayName(), buildinfo.ProductScheme
+	}
+	if value.BrandName == DefaultBrandName && value.BrandSlug == DefaultBrandSlug {
+		return buildinfo.DisplayName(), buildinfo.ProductScheme
 	}
 	return value.BrandName, value.BrandSlug
 }

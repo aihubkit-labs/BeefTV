@@ -127,7 +127,7 @@ func (a *account) resolve(ref string) (string, string, bool, error) {
 	group := strings.TrimPrefix(ref, credentialPrefix)
 	key := a.keys[group]
 	if _, ok := a.groups[group]; !ok || key == "" {
-		return "", "", true, errors.New("aihubkit 分组凭据不可用，请重新登录或同步该分组")
+		return "", "", true, errors.New(a.client.displayName() + " 分组凭据不可用，请重新登录或同步该分组")
 	}
 	return a.client.upstreamOrigin(), key, true, nil
 }

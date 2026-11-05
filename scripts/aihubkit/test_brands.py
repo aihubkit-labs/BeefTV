@@ -46,9 +46,16 @@ class BrandTests(unittest.TestCase):
         self.assertEqual(value['artifactName'], '客户平台TV')
 
     def test_invalid_status_does_not_fall_back_to_a_default_brand(self):
-        for data in [dict(self.data, system_name=''), dict(self.data, api_server_address=''), dict(self.data, logo='http://cdn.example/icon'), dict(self.data, api_server_address='https://name:pass@api.example')]:
+        for data in [dict(self.data, system_name=''), dict(self.data, system_name='Customer/Studio'), dict(self.data, api_server_address=''), dict(self.data, logo='http://cdn.example/icon'), dict(self.data, api_server_address='https://name:pass@api.example')]:
             with self.subTest(data=data), self.assertRaises(ValueError):
                 brands.metadata(self.entry, {'success': True, 'data': data})
+
+    def test_release_rejects_names_that_github_would_change(self):
+        for name in ['ZModelTV', 'shanzhuTV', 'Brand-1_Studio.TV']:
+            brands.validate_release_name(dict(self.entry, artifactName=name))
+        for name in ['客户平台TV', 'Brand StudioTV', 'Brand+TV']:
+            with self.assertRaisesRegex(ValueError, 'GitHub Release'):
+                brands.validate_release_name(dict(self.entry, artifactName=name))
 
     def test_registry_rejects_duplicate_ids_or_origins(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -69,6 +76,8 @@ class BrandTests(unittest.TestCase):
             env = brands.environment(root / 'fixture')
             self.assertEqual(env['BEEFTV_INSTALL_NAME'], 'fixtureTV')
             self.assertEqual(env['BEEFTV_PRODUCT_NAME'], '客户平台TV')
+            self.assertEqual(env['BEEFTV_ARTIFACT_NAME'], '客户平台TV')
+            self.assertIn('buildinfo.DataDirectory=fixtureTV', env['BEEFTV_EXTRA_LDFLAGS'])
             encoded = env['BEEFTV_EXTRA_LDFLAGS'].split('branding.Snapshot=')[1].split()[0]
             self.assertEqual(json.loads(base64.b64decode(encoded))['apiOrigin'], 'https://api.example')
             (root / 'fixture/logo.png').write_bytes(b'wrong icon')
@@ -113,6 +122,8 @@ class BrandBuildTests(unittest.TestCase):
         links = HeadLinks(self.index.read_text()).links
         self.assertIn(dict(rel='stylesheet', href='/aihubkit-brand/loading.css'), links)
         self.assertIn(dict(rel='preload', **{'as': 'image'}, href='/aihubkit-brand/logo.png'), links)
+        self.assertIn(dict(rel='icon', type='image/png', href='/aihubkit-brand/logo.png'), links)
+        self.assertIn('<title>Fixture TV</title>', self.index.read_text())
         self.assertEqual((self.public / 'logo.png').read_bytes(), (self.snapshot / 'logo.png').read_bytes())
         self.assertEqual((self.public / 'loading.css').read_bytes(), self.css.read_bytes())
         self.assertEqual(json.loads(self.config.read_text())['frontend:build'], 'bun run build:desktop')
@@ -132,6 +143,19 @@ class BrandBuildTests(unittest.TestCase):
         with patch.object(brands.subprocess, 'run', side_effect=fail):
             with self.assertRaises(subprocess.CalledProcessError):
                 brands.build(self.snapshot, 'windows/amd64')
+        self.check_restored()
+
+    def test_mac_application_uses_product_name_instead_of_storage_identity(self):
+        (self.snapshot / 'logo.png').write_bytes(b'brand')
+        output = self.root / 'backend/cmd/desktop/build/bin'
+        def native_build(*args, **kwargs):
+            self.check_build_inputs()
+            self.assertEqual(json.loads(self.config.read_text())['info']['productName'], 'Fixture TV')
+            (output / 'BeefTV.app').mkdir(parents=True)
+        with patch.object(brands.subprocess, 'run', side_effect=native_build):
+            brands.build(self.snapshot, 'darwin/arm64')
+        self.assertTrue((output / 'Fixture TV.app').is_dir())
+        self.assertFalse((output / 'fixtureTV.app').exists())
         self.check_restored()
 
     def test_missing_stylesheet_stops_before_build_and_restores_inputs(self):

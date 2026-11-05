@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"io"
 	"net"
 	"net/http"
@@ -118,7 +119,9 @@ type MediaTaskMissingError struct {
 	RequestID string
 }
 
-func (e *MediaTaskMissingError) Error() string { return "BeefTV 查不到这个编号的提交记录" }
+func (e *MediaTaskMissingError) Error() string {
+	return buildinfo.DisplayText("{{productName}} 查不到这个编号的提交记录")
+}
 
 // IsMediaTaskNotFound 表示查询原编号时 BeefAPI 查不到这次提交。
 func IsMediaTaskNotFound(err error) bool {

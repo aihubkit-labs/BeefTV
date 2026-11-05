@@ -98,7 +98,7 @@ func (c *client) requestUploadTicket(ctx context.Context, token, filename, conte
 			return err
 		}
 		if attempt == 2 {
-			return fmt.Errorf("申请 aihubkit 临时上传地址失败，已尝试 3 次：%w", err)
+			return fmt.Errorf("申请 %s 临时上传地址失败，已尝试 3 次：%w", c.displayName(), err)
 		}
 		wait := time.NewTimer(time.Duration(attempt+1) * 300 * time.Millisecond)
 		select {

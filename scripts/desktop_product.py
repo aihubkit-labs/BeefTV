@@ -12,6 +12,8 @@ if not re.fullmatch(r'[a-z][a-z0-9-]{0,40}', PACKAGE_ID):
     raise ValueError('Invalid distribution package ID')
 if not ARTIFACT_NAME or any(c in ARTIFACT_NAME for c in '<>:"/\\|?*\r\n'):
     raise ValueError('Invalid distribution artifact name')
-MAC_BUNDLE = INSTALL_NAME + '.app'
+if not PRODUCT_NAME or any(ord(c) < 32 or c in '<>:"/\\|?*' for c in PRODUCT_NAME):
+    raise ValueError('Invalid distribution product name')
+MAC_BUNDLE = PRODUCT_NAME + '.app'
 LINUX_BUNDLE = INSTALL_NAME + '-linux'
 WINDOWS_EXE = INSTALL_NAME + '.exe'

@@ -1,8 +1,7 @@
 import { createContext, useContext } from "react";
-import { useAppearanceStore } from "@/stores/use-appearance-store";
+import { useClientName } from "@/lib/product-name";
 
-export const clientName = () => useAppearanceStore.getState().appearance.brandName;
-export const useClientName = () => useAppearanceStore((state) => state.appearance.brandName);
+export { clientName, useClientName } from "@/lib/product-name";
 export function ClientName() { return <>{useClientName()}</>; }
 
 // Optional distribution presentation; the local product retains its defaults.
@@ -11,5 +10,6 @@ export const ProductPresentationContext = createContext<{
     staticVersion?: boolean;
     hideBuiltinChannel?: boolean;
     hideCliInstallInstructions?: boolean;
+    hideDefaultUserAgent?: boolean;
 }>({});
 export const useProductPresentation = () => useContext(ProductPresentationContext);

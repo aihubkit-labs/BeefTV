@@ -1,5 +1,6 @@
 import { Button, Input } from "antd";
 import { Tooltip } from "@/components/ui/base/tooltip";
+import { useProductPresentation } from "@/components/brand/product-presentation";
 
 import { Plus, Trash2 } from "lucide-react";
 import type { ChangeEvent } from "react";
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export function ChannelHeadersEditor({ value = [], onChange, disabled }: Props) {
+    const { hideDefaultUserAgent } = useProductPresentation();
     const headers = Array.isArray(value) ? value : [];
     const validation = validateChannelHeaders(headers);
     const hasUserAgent = headers.some((header) => header.name.trim().toLowerCase() === "user-agent");
@@ -48,10 +50,10 @@ export function ChannelHeadersEditor({ value = [], onChange, disabled }: Props) 
             <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                     <div className="text-sm font-medium text-foreground">自定义请求头</div>
-                    <div className="mt-0.5 break-all text-xs leading-5 text-foreground/50">默认发送 {DEFAULT_USER_AGENT}；添加 User-Agent 后会覆盖默认值。</div>
+                    <div className="mt-0.5 break-all text-xs leading-5 text-foreground/50">{!hideDefaultUserAgent && <>默认发送 {DEFAULT_USER_AGENT}；</>}添加 User-Agent 后会覆盖默认值。</div>
                 </div>
                 {!hasUserAgent ? (
-                    <Button size="small" disabled={disabled || headers.length >= MAX_HEADER_COUNT} onClick={() => onChange?.([...headers, { name: "User-Agent", value: DEFAULT_USER_AGENT }])}>
+                    <Button size="small" disabled={disabled || headers.length >= MAX_HEADER_COUNT} onClick={() => onChange?.([...headers, { name: "User-Agent", value: hideDefaultUserAgent ? "" : DEFAULT_USER_AGENT }])}>
                         添加 User-Agent
                     </Button>
                 ) : null}

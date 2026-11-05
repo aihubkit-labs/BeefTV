@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"infinite-canvas/backend/internal/buildinfo"
 	"io"
 	"log"
 	"net/http"
@@ -426,7 +427,7 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":   http.StatusForbidden,
 				"reason": "agent_token_cannot_approve",
-				"msg":    "Agent 自身的凭据不能批准生成单，请使用工作区 owner 凭据或在 BeefTV 界面确认",
+				"msg":    buildinfo.DisplayText("Agent 自身的凭据不能批准生成单，请使用工作区 owner 凭据或在 {{productName}} 界面确认"),
 			})
 			return
 		}
@@ -476,7 +477,7 @@ func RegisterAgentProxyRoutes(r gin.IRouter, svc *app.Service, clients *agentops
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":   http.StatusForbidden,
 				"reason": "agent_token_cannot_approve",
-				"msg":    "Agent 自身的凭据不能批准生成单，请使用工作区 owner 凭据或在 BeefTV 界面确认",
+				"msg":    buildinfo.DisplayText("Agent 自身的凭据不能批准生成单，请使用工作区 owner 凭据或在 {{productName}} 界面确认"),
 			})
 			return
 		}

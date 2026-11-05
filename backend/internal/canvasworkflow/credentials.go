@@ -3,6 +3,7 @@ package canvasworkflow
 import (
 	"encoding/json"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"strings"
 
 	"infinite-canvas/backend/internal/beefapi"
@@ -138,7 +139,7 @@ func RefreshCredentials(host CompileHost, input map[string]any, channelID string
 			return e
 		}
 		if key == "" {
-			return BadRequest("BeefTV 连接已断开，请先在设置中重新连接")
+			return BadRequest(buildinfo.DisplayText("{{productName}} 连接已断开，请先在设置中重新连接"))
 		}
 		config["apiKey"] = key
 		config["baseUrl"] = base

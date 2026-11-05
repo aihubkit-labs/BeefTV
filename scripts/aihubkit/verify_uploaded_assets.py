@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Verify draft uploads and reconcile GitHub's normalized download filenames."""
+"""Verify draft upload names and bytes before making a release public."""
 import argparse
-from collections import defaultdict
 import hashlib
 import json
 from pathlib import Path
@@ -13,31 +12,25 @@ def reconcile(directory, assets, notes):
     remote = [a for a in assets if a['name'] != 'SHA256SUMS.txt']
     if len(remote) != len(local):
         raise ValueError('Uploaded release asset count differs from the build inventory')
-    by_content = defaultdict(list)
+    by_name = {}
     for asset in remote:
         name = asset['name']
         if not name or any(c in name for c in '/\\\r\n') or name in ('.', '..') or asset['state'] != 'uploaded':
             raise ValueError('Invalid or incomplete release upload')
-        by_content[(asset['digest'], asset['size'])].append(asset)
-    mapping, checksums = {}, []
+        if name in by_name:
+            raise ValueError('Duplicate release filename: ' + name)
+        by_name[name] = asset
+    if set(by_name) != {path.name for path in local}:
+        raise ValueError('Uploaded release filenames differ from the build inventory; publication is blocked')
+    checksums = []
     for path in local:
         with path.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        candidates = by_content[('sha256:' + digest, path.stat().st_size)]
-        matching = next((a for a in candidates if a['name'] == path.name), None)
-        if matching is None:
-            if len(candidates) != 1:
-                raise ValueError('Cannot verify uploaded bytes for ' + path.name)
-            matching = candidates[0]
-        candidates.remove(matching)
-        mapping[path.name] = matching['name']
-        checksums.append(f"{digest}  {matching['name']}\n")
-    if len(set(mapping.values())) != len(local):
-        raise ValueError('GitHub normalized two asset names to the same filename')
+        matching = by_name[path.name]
+        if matching['digest'] != 'sha256:' + digest or matching['size'] != path.stat().st_size:
+            raise ValueError('Cannot verify uploaded bytes for ' + path.name)
+        checksums.append(f"{digest}  {path.name}\n")
     (directory / 'SHA256SUMS.txt').write_text(''.join(checksums), encoding='utf-8')
-    # Replace only file references; preserve the platform's original display name.
-    for original, uploaded in mapping.items():
-        notes = notes.replace('`' + original + '`', '`' + uploaded + '`')
     return notes
 
 

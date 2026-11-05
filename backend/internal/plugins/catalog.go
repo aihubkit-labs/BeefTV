@@ -3,6 +3,7 @@ package plugins
 import (
 	"strings"
 
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/protocol"
 )
@@ -48,7 +49,7 @@ func (s *Service) ProviderCatalog(scope, capability string, includeUnavailable b
 				continue
 			}
 			item := ProviderCatalogItem{
-				ID: provider.ID, Version: plugin.Manifest.Version, Name: provider.Label, Vendor: plugin.Manifest.Author,
+				ID: provider.ID, Version: plugin.Manifest.Version, Name: buildinfo.DisplayText(provider.Label), Vendor: plugin.Manifest.Author,
 				Categories: provider.Capabilities, Scopes: provider.Scopes, BaseURL: provider.BaseURL,
 				AuthType: provider.Auth.Type,
 				Enabled:  plugin.Status == StatusEnabled, UnavailableReason: plugin.Error,

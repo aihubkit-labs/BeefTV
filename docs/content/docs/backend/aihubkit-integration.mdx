@@ -13,6 +13,10 @@ description: Fork 的平台登录、账号工作区与通用参考文件存储
 
 稳定品牌 ID 决定应用标识和默认数据目录（`<id>TV`），与展示名称解耦。不同品牌各自安装、各自保存工作区；重命名平台不迁移数据目录。不改写用户配置的 S3 桶名、资源名或实际路径。
 
+客户端展示名称、macOS 应用文件名、DMG 磁盘标题及本地安装包文件名统一使用构建快照中的 `system_name + "TV"`，保留大小写。稳定品牌 ID 仅用于应用标识、内部安装路径和数据隔离。平台名称含文件系统禁止的字符时停止构建，不静默删改名称。GitHub Release 会改写中文及空格等附件名，因此正式发布预检要求名称仅包含英文字母、数字、点、下划线或连字符；不增加外层包装 ZIP。上传后再次核对文件名、大小和摘要，不一致时禁止公开发布。本地构建仍可保留中文名称。
+
+Agent 状态、模型选择菜单、转写、超分及任务错误提示使用当前品牌名称。平台渠道通过既有凭据扩展点为文本节点和内置 Agent 提供同一分组凭据及实时 API 地址；凭据不可用时停止调用，不回退到渠道内残留的密钥。右侧模型菜单直接展示渠道品牌和分组。
+
 ## 清单驱动的品牌发布
 
 每次正式发布覆盖运营清单中的所有品牌、四种桌面目标和对应便携 ZIP。清单只存稳定 ID 与专属域名，名称、API 地址和图标由接口决定。预检一次冻结全部品牌快照和图标，各平台复用该快照。名称重复、元数据或图标获取失败、任一平台验收失败或发布资产缺失时，工作流不会公开 Release。
@@ -80,7 +84,7 @@ Python 图标依赖自动装入 `.local/brand-build-venv`。入口准备 Go/Web 
 
 前端请求适配在桌面启动后安装，仅向当前后端 API 添加桌面授权和账号会话请求头，并直接保留调用方的取消信号。避免多层复制 `Request`：WebKit 在垃圾回收后可能丢失复制链中的取消传播，导致离开画布后实时事件流仍占用连接，最终阻塞画布保存等请求。相关回归可在 `web/` 运行 `bun scripts/aihubkit-transport-smoke.mjs`（先安装 Playwright WebKit）；测试覆盖连续切换、取消后写请求以及请求头隔离，不调用真实模型。
 
-平台后端集中在 `backend/internal/integrations/aihubkit/`，前端集中在 `web/src/integrations/aihubkit/`。官方组合根仅增加 `HostRuntime` 和服务配置 hook；凭据与参考存储通过 `app.Extensions` 的可选端口接入。生成域只选择参考存储实现及检查整批参考链接的有效性，不依赖平台账号实现。视频请求复用现有 `aihubkit-video` 协议插件，不另建生成队列或画布流程。
+平台后端集中在 `backend/internal/integrations/aihubkit/`，前端集中在 `web/src/integrations/aihubkit/`。官方组合根仅增加 `HostRuntime` 和服务配置 hook；凭据与参考存储通过 `app.Extensions` 的可选端口接入。生成域只选择参考存储实现及检查整批参考链接的有效性，不依赖平台账号实现。视频请求复用现有 `aihubkit-video` 协议插件，不另建生成队列或画布流程。首帧、尾帧分别发送为 `first_image`、`last_image`，其余参考素材保持原字段；模型参数及素材限制由中转站校验。声明式插件的展示元数据及校验提示可使用 `{{productName}}` 占位符，读取时展开为当前客户端名；协议 ID、请求数据及第三方署名不参与替换。
 
 贴牌规则集中在适配层的 `branding`、`brand.tsx` 和 `scripts/aihubkit/brands.py`。官方代码只提供可选展示端口 `ProductPresentationContext`、既有 appearance store、协议显示名映射，以及 `buildinfo` 的通用发行标识。构建与安装脚本通过可选 `BEEFTV_PRODUCT_NAME`、`BEEFTV_INSTALL_NAME`、`BEEFTV_APP_ICON` 等参数复用，默认值仍是官方产品。合并上游时重点关注侧栏和模型配置页面的展示接入、桌面启动与存储目录、安装器参数和复用工作流；不以旧版自有代码覆盖官方新增业务逻辑。
 

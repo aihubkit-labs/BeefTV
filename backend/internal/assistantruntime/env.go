@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/assistant"
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/desktopnet"
 )
 
@@ -25,6 +26,7 @@ func (h *Host) buildEnv(provider assistant.Provider, pin childPin) []string {
 	}
 	set("BEEFTV_AGENT_DATA_DIR", h.dataDir())
 	set("BEEFTV_AGENT_MODEL", provider.Model)
+	set("BEEFTV_AGENT_PRODUCT_NAME", buildinfo.DisplayName())
 	set("BEEFTV_AGENT_BASE_URL", hostBaseURL(provider.BaseURL, provider.Protocol))
 	set("BEEFTV_AGENT_API", hostAPI(provider.Protocol))
 	set("BEEFTV_OPS_URL", opsBaseURL(pin.OpsURL, h.backendAddr()))

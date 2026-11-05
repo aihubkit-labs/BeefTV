@@ -8,6 +8,7 @@ export function CanvasAssistantModelPicker({ busy }: { busy: boolean }) {
     const options = assistantModelOptions(config).map((value) => ({
         value,
         label: modelDisplayName(config, value),
+        channelName: resolveModelChannel(config, value).name,
         title: `${modelDisplayName(config, value)} · ${resolveModelChannel(config, value).name}`,
     }));
     return (
@@ -19,6 +20,12 @@ export function CanvasAssistantModelPicker({ busy }: { busy: boolean }) {
             value={selected || undefined}
             placeholder={options.length ? "选择助手模型" : "暂无可用模型"}
             options={options}
+            optionRender={(option) => (
+                <div className="max-w-80 whitespace-normal break-words py-1">
+                    <div>{option.data.label}</div>
+                    <div className="text-xs text-foreground/60">{option.data.channelName}</div>
+                </div>
+            )}
             disabled={busy || options.length === 0}
             placement="topLeft"
             popupMatchSelectWidth={false}

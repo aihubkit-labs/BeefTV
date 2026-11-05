@@ -124,6 +124,23 @@ func TestPackageDarwinLayoutAndModes(t *testing.T) {
 	}
 }
 
+func TestPackageDarwinKeepsUnicodeDisplayName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("macOS archives preserve Unix executable modes")
+	}
+	previous := macBundleName
+	macBundleName = "客户平台 New APITV.app"
+	t.Cleanup(func() { macBundleName = previous })
+	app := writeFakeDarwinApp(t, filepath.Join(t.TempDir(), macBundleName))
+	archive := filepath.Join(t.TempDir(), "client.zip")
+	if err := packageBundle(platformDarwinARM64, app, archive); err != nil {
+		t.Fatal(err)
+	}
+	if !zipNames(t, archive)[macBundleName+"/"+macExecutableRel] {
+		t.Fatal("archive lost the application's display name")
+	}
+}
+
 func TestPackageWindowsLayout(t *testing.T) {
 	bin := writeFakeWindowsBin(t, t.TempDir())
 	if err := os.WriteFile(filepath.Join(bin, ".env.local"), []byte("nope"), 0o600); err != nil {

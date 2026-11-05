@@ -56,16 +56,20 @@ func (s *Service) ResolveAssistantProvider() (AssistantProvider, error) {
 	if err != nil {
 		return AssistantProvider{}, err
 	}
-	for index, channel := range snapshot.Channels {
-		if strings.TrimSpace(channel.Name) == "" && channel.ID == beefapi.ChannelID {
-			snapshot.Channels[index].Name = "BeefTV"
-		}
-	}
 	return modelcatalog.ResolveAssistantProvider(snapshot, s.assistantManagedCredentialLookup())
 }
 
 func (s *Service) assistantManagedCredentialLookup() modelcatalog.ManagedCredentialLookup {
 	return func(channelID, credentialRef, baseURL string) (string, string, bool) {
+		if s.extensions.ResolveCredential != nil {
+			base, key, handled, err := s.extensions.ResolveCredential(credentialRef)
+			if err != nil {
+				return "", "", true
+			}
+			if handled {
+				return key, base, true
+			}
+		}
 		if !(beefapi.IsManagedChannel(channelID, credentialRef, baseURL) || channelID == beefapi.ChannelID) {
 			return "", "", false
 		}
@@ -82,11 +86,6 @@ func assistantReasonMessage(reason string) string {
 }
 
 func (s *Service) resolveAssistantChannelModel(snapshot assistantConfigSnapshot, modelKey string) (AssistantProvider, string) {
-	for index, channel := range snapshot.Channels {
-		if strings.TrimSpace(channel.Name) == "" && channel.ID == beefapi.ChannelID {
-			snapshot.Channels[index].Name = "BeefTV"
-		}
-	}
 	return modelcatalog.ResolveAssistantChannelModel(snapshot, modelKey, s.assistantManagedCredentialLookup())
 }
 
@@ -99,12 +98,6 @@ func channelModelProtocol(channel assistantChannel, modelID string) (string, boo
 }
 
 func assistantChannelName(channel assistantChannel) string {
-	if name := modelcatalog.AssistantChannelName(channel); name != "" && name != channel.ID {
-		return name
-	}
-	if channel.ID == beefapi.ChannelID {
-		return "BeefTV"
-	}
 	return modelcatalog.AssistantChannelName(channel)
 }
 

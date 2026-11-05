@@ -3,6 +3,7 @@ package resource
 import (
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"sync"
 	"time"
 
@@ -122,7 +123,7 @@ func TaskStorageError(cause error) error {
 	if mapped := localtask.AdmissionValidationError(cause); mapped != nil {
 		return mapped
 	}
-	return &kernel.AppError{Status: 500, Code: 500, Reason: "local_storage_failed", Message: "本地任务保存失败，尚未提交生成。请重启 BeefTV 后重试；若仍失败，请更新应用并联系支持", Cause: cause}
+	return &kernel.AppError{Status: 500, Code: 500, Reason: "local_storage_failed", Message: buildinfo.DisplayText("本地任务保存失败，尚未提交生成。请重启 {{productName}} 后重试；若仍失败，请更新应用并联系支持"), Cause: cause}
 }
 
 func SaveTaskCompletionWithinStorageQuota(

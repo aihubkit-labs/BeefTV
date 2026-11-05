@@ -1,3 +1,4 @@
+import { clientName } from "@/lib/product-name";
 // AI 编辑命令的边界层：同一份注册表同时约束模型输出和宿主执行，避免提示词与真实能力列表分叉。
 // 本文件只负责 JSON 结构解析、批量预检和提示词契约生成；命令的参数合法性仍由编辑命令注册表统一判定。
 // 预检使用与正式执行相同的纯函数注册表，保证“模型看见的能力”和“宿主实际允许的能力”一致。
@@ -208,7 +209,7 @@ export function buildAiEditingSystemPrompt(timelineSummary: string): string {
         (entry) => `- ${entry.op}：${entry.desc}。payload：${entry.payload}`,
     ).join("\n");
     return [
-        "你是 BeefTV 视频剪辑工作台的 AI 剪辑助手。根据用户指令对时间线输出受约束的编辑命令 JSON。",
+        `你是 ${clientName()} 视频剪辑工作台的 AI 剪辑助手。根据用户指令对时间线输出受约束的编辑命令 JSON。`,
         "时间线当前状态：",
         timelineSummary,
         "可用命令契约（与编辑器同源，非法命令会被整批拒绝）：",

@@ -2,6 +2,7 @@ package desktopstorage
 
 import (
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -18,7 +19,7 @@ func openMigrationFile(path string) (*os.File, error) {
 	for attempt := 0; ; attempt++ {
 		file, err := os.Open(path)
 		if fileInUse(err) && attempt == 2 {
-			return nil, fmt.Errorf("文件仍在使用中，请关闭其他 BeefTV 窗口后重试: %w", err)
+			return nil, fmt.Errorf("文件仍在使用中，请关闭其他 %s 窗口后重试: %w", buildinfo.DisplayName(), err)
 		}
 		if err == nil || !fileInUse(err) || attempt == 2 {
 			return file, err

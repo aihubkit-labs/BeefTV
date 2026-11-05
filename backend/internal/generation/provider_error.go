@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/beefapi"
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/outbound"
 )
 
@@ -72,7 +73,7 @@ type categoryCopy struct {
 }
 
 var categoryCopies = map[FailureCategory]categoryCopy{
-	CategoryLocalDiskFull:       {Reason: "本地磁盘空间不足，无法保存数据", Action: "请清理 BeefTV 数据目录所在磁盘；已有生成结果请优先取回原任务，不要重复生成"},
+	CategoryLocalDiskFull:       {Reason: "本地磁盘空间不足，无法保存数据", Action: "请清理 {{productName}} 数据目录所在磁盘；已有生成结果请优先取回原任务，不要重复生成"},
 	CategoryLocalCredential:     {Reason: "本地算力凭据读取失败", Action: "请检查工作区数据目录并重新连接算力账号；不要删除工作区密钥"},
 	CategoryAuth:                {Reason: "模型服务鉴权失败", Action: "请检查 API Key 后重试"},
 	CategoryPermission:          {Reason: "当前渠道没有使用该模型的权限", Action: "请更换模型或检查渠道权限"},
@@ -147,7 +148,7 @@ func (f Failure) displayCopy() (string, string) {
 	if copyText.Reason == "" {
 		copyText = categoryCopies[CategoryUnknown]
 	}
-	return copyText.Reason, copyText.Action
+	return copyText.Reason, buildinfo.DisplayText(copyText.Action)
 }
 
 func (f Failure) debugIDLine() string {

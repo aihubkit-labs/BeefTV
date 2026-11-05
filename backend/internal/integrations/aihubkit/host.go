@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"infinite-canvas/backend/internal/bootstrap"
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/depthcapture"
 	"infinite-canvas/backend/internal/integrations/aihubkit/branding"
 	"infinite-canvas/backend/internal/runtimeinfo"
@@ -82,6 +83,7 @@ func Open(_ context.Context, cfg bootstrap.Config) (*Host, error) {
 	}
 	h := &Host{cfg: cfg, client: newClient(), brand: branding.New(brand), errors: make(chan error, 1), lock: lock}
 	if brand.ID != "" {
+		buildinfo.SetDisplayName(brand.AppName)
 		h.client.origin = brand.APIOrigin
 		h.client.platformName = brand.PlatformName
 		h.client.brand = h.brand
@@ -196,6 +198,9 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("refresh") == "1" {
 			brand, _ = h.brand.Refresh(r.Context())
 		}
+		if brand.ID != "" {
+			buildinfo.SetDisplayName(brand.AppName)
+		}
 		reply(w, 200, brand, "", "")
 		return
 	}
@@ -252,7 +257,7 @@ func (h *Host) serve(w http.ResponseWriter, r *http.Request) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if !h.authenticated(r) {
-		reply(w, 401, nil, "请先登录 aihubkit", "aihubkit_login_required")
+		reply(w, 401, nil, "请先登录 "+buildinfo.DisplayName(), "aihubkit_login_required")
 		return
 	}
 	if r.Method != "GET" && r.Method != "HEAD" && !sameSecret(r.Header.Get(sessionHeader), h.session) {

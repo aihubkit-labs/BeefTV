@@ -168,7 +168,7 @@ type metadataAdapter struct {
 	delegate Adapter
 }
 
-func (a metadataAdapter) Metadata() Metadata { return a.metadata }
+func (a metadataAdapter) Metadata() Metadata { return PresentMetadata(a.metadata) }
 func (a metadataAdapter) MediaAuth() ManifestAuth {
 	if adapter, ok := a.delegate.(MediaAuthAdapter); ok {
 		return adapter.MediaAuth()
@@ -463,7 +463,7 @@ func validateManifestOperation(operation ManifestOperation) error {
 
 type manifestAdapter struct{ manifest Manifest }
 
-func (a manifestAdapter) Metadata() Metadata      { return a.manifest.Metadata }
+func (a manifestAdapter) Metadata() Metadata      { return PresentMetadata(a.manifest.Metadata) }
 func (a manifestAdapter) MediaAuth() ManifestAuth { return a.manifest.Auth }
 func (a manifestAdapter) AgentAvailable() bool {
 	return a.manifest.Agent != nil && a.manifest.AgentResponse != nil
@@ -758,26 +758,6 @@ func manifestRequestVariables(bindings []ManifestVariable, request GenerationReq
 		values[binding.Name] = value
 	}
 	return values, nil
-}
-
-func validateManifestRequest(rules []ManifestValidation, request GenerationRequest, variables ...map[string]any) error {
-	if draftTaskID, ok := request.Extra["draft_task_id"].(string); len(rules) == 0 || (ok && strings.TrimSpace(draftTaskID) != "") {
-		return nil
-	}
-	env := map[string]any{"request": manifestRequestValues(request)}
-	if len(variables) > 0 {
-		env["vars"] = variables[0]
-	}
-	for _, rule := range rules {
-		value, err := evaluateManifestValue(rule.Assert, env)
-		if err != nil {
-			return fmt.Errorf("协议参数校验表达式错误：%w", err)
-		}
-		if !manifestTruthy(value) {
-			return fmt.Errorf("%s", strings.TrimSpace(rule.Message))
-		}
-	}
-	return nil
 }
 
 func manifestResponseString(template any, env map[string]any) string {

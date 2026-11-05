@@ -3,6 +3,7 @@ package runtimeinfo
 import (
 	"encoding/json"
 	"errors"
+	"infinite-canvas/backend/internal/buildinfo"
 	"os"
 	"path/filepath"
 )
@@ -28,7 +29,7 @@ func LockWorkspace(dataDir string) (*os.File, error) {
 	}
 	if busy {
 		_ = lock.Close()
-		return nil, errors.New("此数据目录正在被另一实例使用，请先关闭其他 BeefTV 窗口")
+		return nil, errors.New(buildinfo.DisplayText("此数据目录正在被另一实例使用，请先关闭其他 {{productName}} 窗口"))
 	}
 	return lock, nil
 }

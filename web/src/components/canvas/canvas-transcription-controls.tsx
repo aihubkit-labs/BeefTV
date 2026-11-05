@@ -1,3 +1,4 @@
+import { clientName } from "@/lib/product-name";
 import { useEffect, useRef, useState } from "react";
 import { Button, Select } from "antd";
 import { BeefAPIConnectionChangedError } from "@/services/api/beefapi-connection";
@@ -61,7 +62,7 @@ export function CanvasTranscriptionControls({
         try {
             const result = await getTranscriptionModels();
             if (!mountedRef.current || request !== requestRef.current) return;
-            setModels(result.map((item) => ({ value: item.id, label: `${item.displayName || item.id} · BeefTV` })));
+            setModels(result.map((item) => ({ value: item.id, label: `${item.displayName || item.id} · ${clientName()}` })));
             if (!result.length) setStatus("当前连接没有可用的云端转写模型");
         } catch (error) {
             if (mountedRef.current && request === requestRef.current && !(error instanceof BeefAPIConnectionChangedError)) setStatus(error instanceof Error ? error.message : "读取转写模型失败");

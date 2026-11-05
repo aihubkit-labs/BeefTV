@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"infinite-canvas/backend/internal/buildinfo"
 	"io"
 	"net"
 	"net/http"
@@ -140,7 +141,7 @@ func RegisterAgentOpsRoutes(r gin.IRouter, svc agentOpsService, store *agentops.
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":   http.StatusForbidden,
 				"reason": "agent_token_cannot_approve",
-				"msg":    "Agent 自身的凭据不能批准生成单，请使用工作区 owner 凭据或在 BeefTV 界面确认",
+				"msg":    buildinfo.DisplayText("Agent 自身的凭据不能批准生成单，请使用工作区 owner 凭据或在 {{productName}} 界面确认"),
 			})
 			return
 		}

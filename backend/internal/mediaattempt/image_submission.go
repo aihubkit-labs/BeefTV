@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"gorm.io/gorm"
 	"infinite-canvas/backend/internal/beefapi"
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/kernel"
 	"infinite-canvas/backend/internal/model"
@@ -388,7 +389,7 @@ func (s *Service) SendImageSubmissionWithMode(ctx context.Context, task model.Ta
 		return nil, "", imageRecoveryError{err}
 	}
 	if managedFrozenImage(task, wire) {
-		return nil, "", imageRecoveryError{errors.New("BeefTV 图片任务只能按原编号查询")}
+		return nil, "", imageRecoveryError{errors.New(buildinfo.DisplayText("{{productName}} 图片任务只能按原编号查询"))}
 	}
 	deadline := time.Now().Add(RecoveryWait)
 	if expires := row.CreatedAt.Add(RecoveryLifetime); expires.Before(deadline) {

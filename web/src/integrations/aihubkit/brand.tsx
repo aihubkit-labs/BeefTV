@@ -58,7 +58,7 @@ export function HubBrandProvider({ children }: { children: ReactNode }) {
                 if (cancelled) return;
                 document.documentElement.style.setProperty("--aihubkit-loading-logo", `url(${JSON.stringify(logoUrl)})`);
                 setBrand(value);
-                setModelProtocolPresentation({ "aihubkit-video": `${value.platformName} Video` });
+                setModelProtocolPresentation({ "aihubkit-video": `${value.appName} Video` });
                 commitPublicAppearance({ ...previous, brandName: value.appName, brandSlug: value.id, seoTitle: value.appName, seoDescription: `${value.appName}，AI 影视创作工作台。`, footerCopyright: `© ${new Date().getFullYear()} ${value.appName}`, logoUrl, darkLogoUrl: logoUrl, logoConfigured: true, darkLogoConfigured: true, logoFrameEnabled: false, configured: true });
                 native()?.WindowSetTitle?.(value.appName);
             } catch { if (!remote && !cancelled) setFailed(true); }
@@ -79,6 +79,7 @@ export function HubBrandProvider({ children }: { children: ReactNode }) {
                 staticVersion: true,
                 hideBuiltinChannel: true,
                 hideCliInstallInstructions: true,
+                hideDefaultUserAgent: true,
                 ...(brand.id ? { contacts: { website: brand.websiteUrl, qrImage: brand.wechatUrl, openWebsite } } : {}),
             }}>
                 {children}

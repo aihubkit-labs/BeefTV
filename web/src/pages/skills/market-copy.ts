@@ -1,4 +1,5 @@
-export const capabilityOptions = [{ value: "beeftv.canvas", label: "BeefTV 画布工具" }, { value: "model.image", label: "图片理解模型" }, { value: "model.video", label: "视频理解模型" }, { value: "model.audio", label: "音频理解模型" }];
+import { clientName } from "@/lib/product-name";
+export const capabilityOptions = [{ value: "beeftv.canvas", get label() { return `${clientName()} 画布工具`; } }, { value: "model.image", label: "图片理解模型" }, { value: "model.video", label: "视频理解模型" }, { value: "model.audio", label: "音频理解模型" }];
 export function requirementLabel(value: string) {
     return capabilityOptions.find(item => item.value === value)?.label || `未确认的能力：${value}`;
 }

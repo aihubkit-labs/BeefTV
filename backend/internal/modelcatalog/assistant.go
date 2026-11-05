@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"infinite-canvas/backend/internal/assistant"
+	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/protocol"
 )
 
@@ -156,9 +157,8 @@ func resolveChannelModel(snapshot AssistantConfigSnapshot, modelKey string, look
 	}
 	if lookup != nil {
 		if apiKey, baseURL, ok := lookup(channel.ID, channel.CredentialRef, provider.BaseURL); ok {
-			if strings.TrimSpace(apiKey) != "" {
-				provider.APIKey = apiKey
-			}
+			// A handled managed lookup owns the credential, including its absence.
+			provider.APIKey = strings.TrimSpace(apiKey)
 			if strings.TrimSpace(baseURL) != "" {
 				provider.BaseURL = strings.TrimSpace(baseURL)
 			}
@@ -248,6 +248,9 @@ func ChannelModelProtocol(channel AssistantChannel, modelID string) (string, boo
 func AssistantChannelName(channel AssistantChannel) string {
 	if name := strings.TrimSpace(channel.Name); name != "" {
 		return name
+	}
+	if channel.ID == managedChannelID {
+		return buildinfo.DisplayName()
 	}
 	return channel.ID
 }

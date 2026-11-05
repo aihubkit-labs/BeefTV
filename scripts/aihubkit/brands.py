@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+from html import escape
 import io
 import json
 import os
@@ -54,8 +55,9 @@ def metadata(brand, envelope):
     if not name or len(name) > 100 or any(ord(c) < 32 for c in name):
         raise ValueError('Invalid platform name')
     app = name + 'TV'
-    filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', app).rstrip('. ')
-    return dict(brand, platformName=name, appName=app, artifactName=filename,
+    if any(c in app for c in '<>:"/\\|?*'):
+        raise ValueError(f"{brand['id']}: system_name contains characters that cannot be used in application filenames")
+    return dict(brand, platformName=name, appName=app, artifactName=app,
                 logoUrl=https(data['logo']), websiteUrl=https(data['server_address']),
                 wechatUrl=https(data['wechat_qrcode']) if data.get('wechat_qrcode') else '',
                 apiOrigin=https(data['api_server_address'], True), bundledLogo='/aihubkit-brand/logo.png')
@@ -77,7 +79,12 @@ def download(url, limit):
     return body
 
 
-def snapshot(output, selected=None):
+def validate_release_name(brand):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', brand['artifactName']):
+        raise ValueError(f"{brand['id']}: GitHub Release would rewrite the filename; set system_name to English letters, digits, dots, underscores or hyphens before publishing")
+
+
+def snapshot(output, selected=None, *, github_release=False):
     from PIL import Image, ImageOps
     brands = registry()
     if selected:
@@ -87,6 +94,8 @@ def snapshot(output, selected=None):
     resolved, names = [], set()
     for entry in brands:
         brand = metadata(entry, json.loads(download(entry['origin'] + '/api/status', 1 << 20)))
+        if github_release:
+            validate_release_name(brand)
         if brand['artifactName'].casefold() in names:
             raise ValueError('Brands returned duplicate application names; correct domain branding before release')
         names.add(brand['artifactName'].casefold())
@@ -151,6 +160,8 @@ def build(directory, target):
     index = ROOT / 'web/index.html'
     original_index = index.read_bytes()
     html = original_index.decode('utf-8')
+    html = re.sub(r'<title>.*?</title>', lambda _: '<title>' + escape(values['BEEFTV_PRODUCT_NAME']) + '</title>', html, flags=re.I | re.S)
+    html = html.replace('href="/beef-logo.png"', 'href="/aihubkit-brand/logo.png"')
     head_end = re.search(r'</head\s*>', html, re.I)
     if not head_end:
         raise ValueError('Frontend entry must contain a head element for the bundled brand logo')
@@ -163,7 +174,7 @@ def build(directory, target):
         shutil.copy2(ROOT / 'web/src/integrations/aihubkit/brand-loading.css', public / 'loading.css')
         # A render-blocking head stylesheet covers the first paint before React or login.
         # Keep the upstream HTML and shared loaders unchanged outside branded builds.
-        loading = '<link rel="preload" as="image" href="/aihubkit-brand/logo.png">\n<link rel="stylesheet" href="/aihubkit-brand/loading.css">\n'
+        loading = '<link rel="icon" type="image/png" href="/aihubkit-brand/logo.png">\n<link rel="preload" as="image" href="/aihubkit-brand/logo.png">\n<link rel="stylesheet" href="/aihubkit-brand/loading.css">\n'
         index.write_text(html[:head_end.start()] + loading + html[head_end.start():], encoding='utf-8')
         settings = json.loads(original)
         settings['info']['productName'] = values['BEEFTV_PRODUCT_NAME']
@@ -183,7 +194,7 @@ def build(directory, target):
         subprocess.run(command, env=env, cwd=ROOT, check=True)
         out = ROOT / 'backend/cmd/desktop/build/bin'
         if target.startswith('darwin/'):
-            (out / 'BeefTV.app').rename(out / (values['BEEFTV_INSTALL_NAME']+'.app'))
+            (out / 'BeefTV.app').rename(out / (values['BEEFTV_PRODUCT_NAME']+'.app'))
         elif target.startswith('linux/'):
             (out / 'BeefTV-linux').rename(out / (values['BEEFTV_INSTALL_NAME']+'-linux'))
     finally:
@@ -202,6 +213,7 @@ def main():
     p = sub.add_parser('snapshot')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--brand')
+    p.add_argument('--github-release', action='store_true')
     p = sub.add_parser('env')
     p.add_argument('--snapshot', type=Path, required=True)
     p.add_argument('--github-env', type=Path, required=True)
@@ -210,7 +222,7 @@ def main():
     p.add_argument('--target', required=True, choices=['darwin/arm64', 'darwin/amd64', 'windows/amd64', 'linux/amd64'])
     args = parser.parse_args()
     if args.command == 'snapshot':
-        result = snapshot(args.output, args.brand)
+        result = snapshot(args.output, args.brand, github_release=args.github_release)
         print(json.dumps([x['id'] for x in result]))
     elif args.command == 'env':
         with args.github_env.open('a', encoding='utf-8') as stream:

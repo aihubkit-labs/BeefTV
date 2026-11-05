@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"os"
 	"path/filepath"
 	"time"
@@ -81,7 +82,7 @@ func (s *operationSession) ExportCanvasProjectArchive(ctx context.Context, userI
 		return nil, err
 	}
 	resources := localasset.NewService(localasset.Dependencies{Repository: localasset.NewRepository(s.repo), Blobs: localasset.NewFileStore(s.service.dataDir), LocalStorage: true})
-	resource, _, err := resources.Store(userID, "file", "BeefTV-project.zip", "application/zip", info.Size(), 0, 0, 0, file, &key)
+	resource, _, err := resources.Store(userID, "file", buildinfo.DisplayText("{{productName}}-project.zip"), "application/zip", info.Size(), 0, 0, 0, file, &key)
 	return resource, err
 }
 

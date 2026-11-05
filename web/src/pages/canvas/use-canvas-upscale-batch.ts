@@ -1,3 +1,4 @@
+import { clientName } from "@/lib/product-name";
 import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { nanoid } from "nanoid";
 import { App } from "antd";
@@ -123,7 +124,7 @@ export function useCanvasUpscaleBatch({pageUi,  projectId, nodesRef, connections
                 rejectedRetryBlocked = true;
             }
             if (!batch || (batch.items.length > 0 && deriveUpscaleBatchState(batch, nodesRef.current).succeeded === batch.items.length)) {
-                if (!useConfigStore.getState().config.channels.some(channel => channel.enabled !== false && isBuiltinBeefAPIChannel(channel) && channelHasGenerationCredential(channel))) throw new Error("暂无可用超分模型，请连接 BeefTV 内置的官方算力");
+                if (!useConfigStore.getState().config.channels.some(channel => channel.enabled !== false && isBuiltinBeefAPIChannel(channel) && channelHasGenerationCredential(channel))) throw new Error(`暂无可用超分模型，请连接 ${clientName()} 内置的官方算力`);
                 const inputs = structuredClone(getUpscaleInputNodes(processor.id, nodesRef.current, connectionsRef.current));
                 if (!inputs.length) throw new Error("请连接可读取的图片或视频");
                 const defaults = createDefaultUpscaleSettings();
@@ -222,7 +223,7 @@ export function useCanvasUpscaleBatch({pageUi,  projectId, nodesRef, connections
                     continue;
                 }
                 if (!useConfigStore.getState().config.channels.some(channel => channel.enabled !== false && isBuiltinBeefAPIChannel(channel) && channelHasGenerationCredential(channel))) {
-                    update(item, { status: "rejected", error: "暂无可用超分模型，请连接 BeefTV 内置的官方算力" });
+                    update(item, { status: "rejected", error: `暂无可用超分模型，请连接 ${clientName()} 内置的官方算力` });
                     await save();
                     continue;
                 }

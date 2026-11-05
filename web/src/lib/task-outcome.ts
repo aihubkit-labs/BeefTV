@@ -1,3 +1,4 @@
+import { clientName } from "@/lib/product-name";
 export type TaskOutcomePhase = "running" | "fetching" | "ready" | "retrievable" | "failed";
 
 export type TaskOutcomeRegenerate = "allowed" | "confirm" | "blocked";
@@ -319,16 +320,16 @@ function formatClockTime(timestampMs: number): string {
 
 export function formatReconcileDeadlineCopy(reconcileDeadline?: string, nowMs = Date.now()): string {
     if (!reconcileDeadline?.trim()) {
-        return "BeefTV 正在核对上次提交，请稍候";
+        return `${clientName()} 正在核对上次提交，请稍候`;
     }
     const deadlineMs = Date.parse(reconcileDeadline);
     if (Number.isNaN(deadlineMs)) {
-        return "BeefTV 正在核对上次提交，请稍候";
+        return `${clientName()} 正在核对上次提交，请稍候`;
     }
     if (deadlineMs <= nowMs) {
-        return "BeefTV 正在核对，已超过预计时间，可联系客服";
+        return `${clientName()} 正在核对，已超过预计时间，可联系客服`;
     }
-    return `BeefTV 正在核对上次提交，预计 ${formatClockTime(deadlineMs)} 前有结论`;
+    return `${clientName()} 正在核对上次提交，预计 ${formatClockTime(deadlineMs)} 前有结论`;
 }
 
 /**
@@ -418,7 +419,7 @@ export function taskOutcomeCopy(outcome?: TaskOutcome | null, nowMs = Date.now()
                 }
                 const reason = outcome.reconcileDeadline
                     ? formatReconcileDeadlineCopy(outcome.reconcileDeadline, nowMs)
-                    : "BeefTV 正在核对上次提交，请稍候";
+                    : `${clientName()} 正在核对上次提交，请稍候`;
                 const action = "核对完成前请勿重新生成";
                 return {
                     badge: "正在核对",

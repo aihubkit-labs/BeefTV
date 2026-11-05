@@ -1,4 +1,5 @@
 import { http } from "@/services/api/request";
+import { clientName } from "@/lib/product-name";
 
 let connectionEpoch = 0;
 export function getBeefAPIConnectionEpoch() {
@@ -8,7 +9,7 @@ export function getBeefAPIConnectionEpoch() {
 /** 请求期间 BeefAPI 连接被重连或断开：丢弃旧连接的结果，不能当成新连接的数据。 */
 export class BeefAPIConnectionChangedError extends Error {
     constructor() {
-        super("BeefTV 连接已变更，请重新读取");
+        super(`${clientName()} 连接已变更，请重新读取`);
         this.name = "BeefAPIConnectionChangedError";
     }
 }
@@ -68,9 +69,9 @@ export function beefAPIConnectionLabel(summary: BeefAPIConnectionSummary | null 
     const state = summary?.state || "disconnected";
     switch (state) {
         case "connecting":
-            return summary?.errorReason || "正在连接 BeefTV";
+            return summary?.errorReason || `正在连接 ${clientName()}`;
         case "connection_error":
-            return summary?.errorReason || "无法连接 BeefTV 服务，请检查网络后重试";
+            return summary?.errorReason || `无法连接 ${clientName()} 服务，请检查网络后重试`;
         case "pending":
             return summary?.errorReason || (summary?.userCode ? `请在浏览器中确认 ${summary.userCode}` : "请在浏览器中确认授权");
         case "connected":

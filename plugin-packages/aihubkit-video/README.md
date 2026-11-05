@@ -1,4 +1,4 @@
-# AIHubKit Video
+# {{productName}} Video
 
 该目录是 BeefTV 声明式协议插件源码。后端从生成的 `aihubkit-video.beeftv-plugin` 包加载，不依赖系统内置 `host:` 适配器。
 

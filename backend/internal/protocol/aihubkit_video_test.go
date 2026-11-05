@@ -3,7 +3,10 @@ package protocol
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
+
+	"infinite-canvas/backend/internal/buildinfo"
 )
 
 func TestAIHubKitVideoDocumentedRequest(t *testing.T) {
@@ -50,30 +53,48 @@ func TestAIHubKitVideoDocumentedRequest(t *testing.T) {
 	}
 }
 
-func TestAIHubKitVideoRejectsUndocumentedMediaBeforeSubmission(t *testing.T) {
+func TestAIHubKitVideoForwardsFramesAndServerParameters(t *testing.T) {
 	a := officialPackageAdapter(t, "aihubkit-video.beeftv-plugin", "aihubkit-video")
-	for name, mutate := range map[string]func(*GenerationRequest){
-		"empty model":      func(r *GenerationRequest) { r.Model = "" },
-		"empty prompt":     func(r *GenerationRequest) { r.Prompt = " " },
-		"empty resolution": func(r *GenerationRequest) { r.Resolution = "" },
-		"zero duration":    func(r *GenerationRequest) { r.Duration = 0 },
-		"data image":       func(r *GenerationRequest) { r.Images = []MediaReference{{DataURL: "data:image/png;base64,aGVsbG8="}} },
-		"http video":       func(r *GenerationRequest) { r.Videos = []MediaReference{{URL: "http://example.com/demo.mp4"}} },
-		"local audio":      func(r *GenerationRequest) { r.Audios = []MediaReference{{URL: "asset://audio"}} },
-		"first frame": func(r *GenerationRequest) {
-			r.Images = []MediaReference{{URL: "https://example.com/a.jpg", Role: "first_frame"}}
+	request := GenerationRequest{Capability: CapabilityVideo, Model: "server-selected-model", Prompt: "move", Duration: 4, Resolution: "480p",
+		Images: []MediaReference{
+			{URL: "https://example.com/last.jpg", Role: "last_frame", Order: 2},
+			{URL: "https://example.com/first.jpg", Role: "first_frame", Order: 1},
 		},
-		"last frame": func(r *GenerationRequest) {
-			r.Images = []MediaReference{{URL: "https://example.com/a.jpg", Role: "last_frame"}}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := GenerationRequest{Capability: CapabilityVideo, Model: "seedance-2.5_v1", Prompt: "move", Duration: 6, Resolution: "720p"}
-			mutate(&r)
-			if _, err := a.BuildCreate(context.Background(), RequestContext{Request: r}); err == nil {
-				t.Fatal("invalid input was accepted")
-			}
-		})
+	}
+	spec, err := a.BuildCreate(context.Background(), RequestContext{Request: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := manifestTestBody(t, spec)
+	if body["first_image"] != "https://example.com/first.jpg" || body["last_image"] != "https://example.com/last.jpg" || body["referenceImages"] != nil {
+		t.Fatalf("frame roles were lost or duplicated: %#v", body)
+	}
+	// Limits and combinations are decided by the relay, without client model rules.
+	request.Duration = 0
+	request.Resolution = "server-specific"
+	request.Images = append(request.Images, MediaReference{URL: "https://example.com/ref.jpg", Role: "reference_image"})
+	spec, err = a.BuildCreate(context.Background(), RequestContext{Request: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = manifestTestBody(t, spec)
+	if body["duration"] != float64(0) || body["resolution"] != "server-specific" || !reflect.DeepEqual(body["referenceImages"], []any{"https://example.com/ref.jpg"}) {
+		t.Fatalf("server parameters were not preserved: %#v", body)
+	}
+}
+
+func TestAIHubKitVideoErrorUsesCurrentProductName(t *testing.T) {
+	t.Cleanup(func() { buildinfo.SetDisplayName("") })
+	a := officialPackageAdapter(t, "aihubkit-video.beeftv-plugin", "aihubkit-video")
+	for _, name := range []string{"ZModelTV", "shanzhuTV"} {
+		buildinfo.SetDisplayName(name)
+		request := GenerationRequest{Capability: CapabilityVideo, Model: "video", Prompt: "move", Duration: 4, Resolution: "480p",
+			Images: []MediaReference{{URL: "https://example.com/mask.png", Role: "mask"}},
+		}
+		_, err := a.BuildCreate(context.Background(), RequestContext{Request: request})
+		if err == nil || !strings.HasPrefix(err.Error(), name+" Video ") || a.Metadata().Name != name+" Video" {
+			t.Fatalf("missing current product presentation: %v", err)
+		}
 	}
 }
 

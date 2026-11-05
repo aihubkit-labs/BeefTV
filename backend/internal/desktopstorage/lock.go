@@ -2,6 +2,7 @@ package desktopstorage
 
 import (
 	"errors"
+	"infinite-canvas/backend/internal/buildinfo"
 	"os"
 	"path/filepath"
 )
@@ -27,7 +28,7 @@ func LockFile(path string) (*os.File, error) {
 	}
 	if err := lockFile(file); err != nil {
 		file.Close()
-		return nil, errors.New("此数据目录正在被另一实例使用，请先关闭其他 BeefTV 窗口")
+		return nil, errors.New(buildinfo.DisplayText("此数据目录正在被另一实例使用，请先关闭其他 {{productName}} 窗口"))
 	}
 	return file, nil
 }

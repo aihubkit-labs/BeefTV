@@ -1,3 +1,4 @@
+import { clientName } from "@/lib/product-name";
 // SRT 导入导出（复用 srt-parser）+ 「从节点重建字幕片段」命令（快照契约：
 // 节点 subtitleEntries 权威 → 重建时间线字幕快照，替换过期快照，单向显式同步）。
 // 时间线字幕片段是节点字幕的只读快照；AI 高亮只写权威节点字幕。
@@ -90,7 +91,7 @@ export function EditorSubtitleTools() {
                         value={srtText}
                         onChange={(e) => setSrtText(e.target.value)}
                         rows={8}
-                        placeholder={"1\n00:00:00,500 --> 00:00:02,500\n你好，BeefTV"}
+                        placeholder={`1\n00:00:00,500 --> 00:00:02,500\n你好，${clientName()}`}
                         className="w-full resize-y rounded-md border border-[var(--director-sequencer-border)] bg-[var(--director-control-hover)] px-2 py-1.5 font-mono text-[11px] leading-relaxed text-[var(--director-dock-fg-strong)] outline-none focus:border-[var(--workspace-accent)]/60"
                     />
                 </label>

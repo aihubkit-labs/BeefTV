@@ -3,6 +3,7 @@ package operations
 import (
 	"encoding/json"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"reflect"
 	"sort"
 	"strconv"
@@ -210,7 +211,7 @@ func opGenerationSubmit(ctx *Context, raw json.RawMessage) (any, error) {
 				if hint == "" {
 					hint = "<proposalId>"
 				}
-				return nil, PermissionDenied("generation_approval_required", "当前凭据设为「每次问我」，请先在 BeefTV 界面确认或运行 beeftv approve "+hint+" 批准生成单；Agent 自身凭据不能自批")
+				return nil, PermissionDenied("generation_approval_required", buildinfo.DisplayText("当前凭据设为「每次问我」，请先在 {{productName}} 界面确认或运行 beeftv approve ")+hint+" 批准生成单；Agent 自身凭据不能自批")
 			}
 			if existingOrder.Status == GenerationOrderSubmitted && len(existingOrder.TaskIDs) > 0 {
 				return map[string]any{

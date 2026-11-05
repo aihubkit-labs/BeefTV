@@ -116,7 +116,7 @@ test("picker keyboard selection persists, respects busy and fits both themes at 
     await page.goto(server.url.toString());
     const picker = page.getByRole("combobox", { name: "助手模型" });
     await picker.focus(); await picker.press("ArrowDown");
-    expect(await page.locator('.ant-select-item-option-content').allTextContents()).toEqual(["gpt-6-astra", "claude-opus-5-5", "deepseek-v4.1-flash", "glm-5.3"]);
+    expect(await page.locator('.ant-select-item-option-content > div > div:first-child').allTextContents()).toEqual(["gpt-6-astra", "claude-opus-5-5", "deepseek-v4.1-flash", "glm-5.3"]);
     await picker.press("ArrowUp"); await picker.press("Enter");
     await page.waitForTimeout(100);
     expect(saved.assistantModel).toBe("beefapi::gpt-6-astra");
@@ -129,6 +129,26 @@ test("picker keyboard selection persists, respects busy and fits both themes at 
     await page.close();
 }, 30000);
 
+test("brand and group are visible in assistant options without hovering", async () => {
+    saved = { ...defaultConfig, assistantModel: "brand::gpt-6-astra", channels: [createModelChannel({
+        id: "brand", name: "ZModel · default-企业版", credentialRef: "aihubkit:default-企业版", hasApiKey: true,
+        models: ["gpt-6-astra"], modelProfiles: [{ model: "gpt-6-astra", capability: "text", protocol: "chat-completion" }],
+    })] };
+    const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
+    try {
+        await page.goto(server.url.toString());
+        for (let i = 0; i < 2; i++) {
+            await page.getByRole("combobox", { name: "助手模型" }).click();
+            const option = page.locator('.ant-select-item-option-content').filter({ hasText: "gpt-6-astra" });
+            await option.getByText("ZModel · default-企业版", { exact: true }).waitFor({ state: "visible" });
+            expect(await option.getByText("ZModel · default-企业版", { exact: true }).isVisible()).toBe(true);
+            expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+            await page.keyboard.press("Escape");
+            await page.getByRole("button", { name: "切换主题" }).click();
+        }
+    } finally { await page.close(); }
+}, 30000);
+
 test("models-only local default is selectable and survives reload", async () => {
     saved = { ...defaultConfig, assistantModel: "", textModel: "newapi-local::deepseek-v4-flash:free", channels: [createModelChannel({ id: "newapi-local", models: ["deepseek-v4-flash:free"], apiFormat: "openai" })] };
     const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
@@ -138,7 +158,7 @@ test("models-only local default is selectable and survives reload", async () => 
         await picker.click();
         expect(await picker.isDisabled()).toBe(false);
         const option = page.locator('.ant-select-item-option-content');
-        expect(await option.allTextContents()).toEqual(["deepseek-v4-flash:free"]);
+        expect(await option.locator('div > div:first-child').allTextContents()).toEqual(["deepseek-v4-flash:free"]);
         await option.click();
         await page.waitForFunction(() => !document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden)'));
         await page.getByRole("button", { name: "切换主题" }).click();
@@ -154,7 +174,7 @@ test("next turn waits for saved selection; failed save cannot dispatch", async (
     const page = await browser.newPage(); await page.goto(server.url.toString());
     holdSave = true;
     await page.getByRole("combobox", { name: "助手模型" }).click();
-    await page.locator('.ant-select-item-option-content').filter({ hasText: /^glm-5.3$/ }).click();
+    await page.locator('.ant-select-item-option-content').getByText("glm-5.3", { exact: true }).click();
     await page.getByRole("button", { name: "发送测试消息" }).click();
     await page.waitForTimeout(100); expect(submitted).toEqual([]);
     expect(await page.getByRole("combobox", { name: "助手模型" }).isDisabled()).toBe(true);
@@ -162,7 +182,7 @@ test("next turn waits for saved selection; failed save cannot dispatch", async (
     await page.waitForTimeout(500); expect({ submitted, error: await page.locator('output').textContent(), saved: saved.assistantModel }).toEqual({ submitted: ["beefapi::glm-5.3"], error: "", saved: "beefapi::glm-5.3" });
     failSave = true;
     await page.getByRole("combobox", { name: "助手模型" }).click();
-    await page.locator('.ant-select-item-option-content').filter({ hasText: /^gpt-6-astra$/ }).click();
+    await page.locator('.ant-select-item-option-content').getByText("gpt-6-astra", { exact: true }).click();
     await page.getByRole("button", { name: "发送测试消息" }).click();
     await page.waitForFunction(() => document.querySelector('output')?.textContent?.includes('没保存成功'));
     expect(submitted).toHaveLength(1); await page.close();

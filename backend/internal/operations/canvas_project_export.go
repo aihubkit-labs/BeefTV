@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"infinite-canvas/backend/internal/buildinfo"
 	"strings"
 
 	"infinite-canvas/backend/internal/model"
@@ -55,7 +56,7 @@ func opCanvasProjectExport(ctx *Context, raw json.RawMessage) (any, error) {
 		return r
 	}, strings.TrimSpace(name))
 	if name == "" {
-		name = "BeefTV工程"
+		name = buildinfo.DisplayText("{{productName}}工程")
 	}
 	return map[string]any{"canvasId": args.CanvasID, "sourceRevision": *args.ExpectedRevision, "resourceId": resource.ID, "storageKey": "resource:" + resource.ID, "fileName": name + ".zip", "mimeType": resource.MimeType, "bytes": resource.Size, "local": true, "charged": false, "editable": true}, nil
 }

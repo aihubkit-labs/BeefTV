@@ -61,6 +61,44 @@ class WindowsInstallerContractTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'darwin', 'native macOS disk image verification')
 class MacDiskImageTests(unittest.TestCase):
+    def test_brand_disk_image_and_app_share_full_system_name(self):
+        import os
+        import plistlib
+        import shutil
+        import subprocess
+        import tempfile
+        name = '客户平台-Token源头New APITV'
+        with tempfile.TemporaryDirectory(prefix='brand-native-dmg-') as directory:
+            root = Path(directory)
+            payload = root / (name + '.app')
+            binary = payload / 'Contents/MacOS/BeefTV'
+            binary.parent.mkdir(parents=True)
+            shutil.copyfile('/usr/bin/true', binary)
+            binary.chmod(0o755)
+            with (payload / 'Contents/Info.plist').open('wb') as info:
+                plistlib.dump({'CFBundleExecutable': 'BeefTV', 'CFBundleIdentifier': 'test.brand.dmg',
+                               'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
+                               'CFBundleName': name, 'CFBundleDisplayName': name}, info)
+            subprocess.run(['codesign', '--force', '--sign', '-', str(payload)], check=True, capture_output=True)
+            subprocess.run([sys.executable, str(Path(__file__).with_name('package-desktop-installer.py')),
+                            '--platform', 'darwin-arm64', '--input', str(payload), '--output-dir', str(root), '--version', 'v1.0.0'],
+                           env=dict(os.environ, BEEFTV_INSTALL_NAME='fixtureTV', BEEFTV_PACKAGE_ID='fixturetv',
+                                    BEEFTV_PRODUCT_NAME=name, BEEFTV_ARTIFACT_NAME=name),
+                           check=True, capture_output=True)
+            installer = root / (name + '-v1.0.0-darwin-arm64.dmg')
+            subprocess.run(['hdiutil', 'verify', str(installer)], check=True, capture_output=True)
+            mount = root / 'mounted'
+            subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount), str(installer)], check=True, capture_output=True)
+            try:
+                self.assertTrue((mount / (name + '.app')).is_dir())
+                self.assertFalse((mount / 'fixtureTV.app').exists())
+                info = plistlib.loads(subprocess.check_output(['diskutil', 'info', '-plist', str(mount)]))
+                self.assertEqual(info['VolumeName'], name)
+                with (mount / (name + '.app') / 'Contents/Info.plist').open('rb') as stream:
+                    self.assertEqual(plistlib.load(stream)['CFBundleDisplayName'], name)
+            finally:
+                subprocess.run(['hdiutil', 'detach', str(mount)], check=True, capture_output=True)
+
     def test_real_packager_creates_verified_hfs_image(self):
         import plistlib
         import shutil

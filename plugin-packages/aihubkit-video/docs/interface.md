@@ -1,4 +1,4 @@
-# AIHubKit Video 接口字段
+# {{productName}} Video 接口字段
 
 ## 协议身份
 
@@ -25,7 +25,7 @@
 | `duration` | integer | 是 | `duration` | 视频时长（秒），范围由模型决定。 |
 | `resolution` | string | 是 | `resolution` | 分辨率；数字档位转换为带 p 后缀的小写值。 |
 | `aspectRatio` | string | 否 | `ratio` | 视频比例，例如 16:9。 |
-| `images` | media[] | 否 | `referenceImages` | 参考图片的公网 HTTPS URL，按素材顺序发送。 |
+| `images` | media[] | 否 | `first_image / last_image / referenceImages` | 首帧、尾帧分别传递；其余参考图片按素材顺序发送。 |
 | `videos` | media[] | 否 | `referenceVideos` | 参考视频的公网 HTTPS URL。 |
 | `audios` | media[] | 否 | `referenceAudios` | 参考音频的公网 HTTPS URL。 |
 
@@ -43,7 +43,9 @@
 | `create.body.duration` | `{"$ref":"request.duration"}` |
 | `create.body.ratio` | `{"$omitEmpty":{"$ref":"request.aspectRatio"}}` |
 | `create.body.resolution` | `{"$if":{"condition":{"$gt":[{"$toInt":{"$trim":{"$ref":"request.resolution"}}},0]},"then":{"$concat":[{"$toInt":{"$trim":{"$ref":"request.resolution"}}},"p"]},"else":{"$lower":{"$trim":{"$ref":"request.resolution"}}}}}` |
-| `create.body.referenceImages` | `{"$omitEmpty":{"$map":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","in":{"$ref":"media.value"}}}}` |
+| `create.body.first_image` | `{"$omitEmpty":{"$first":{"$map":{"from":{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$in":[{"$ref":"media.role"},["first_frame"]]}}},"as":"media","in":{"$ref":"media.value"}}}}}` |
+| `create.body.last_image` | `{"$omitEmpty":{"$first":{"$map":{"from":{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$in":[{"$ref":"media.role"},["last_frame"]]}}},"as":"media","in":{"$ref":"media.value"}}}}}` |
+| `create.body.referenceImages` | `{"$omitEmpty":{"$map":{"from":{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$in":[{"$coalesce":[{"$ref":"media.role"},"reference_image"]},["reference_image","subject_reference","style_reference"]]}}},"as":"media","in":{"$ref":"media.value"}}}}` |
 | `create.body.referenceVideos` | `{"$omitEmpty":{"$map":{"from":{"$sortByOrder":{"$ref":"request.videos"}},"as":"media","in":{"$ref":"media.value"}}}}` |
 | `create.body.referenceAudios` | `{"$omitEmpty":{"$map":{"from":{"$sortByOrder":{"$ref":"request.audios"}},"as":"media","in":{"$ref":"media.value"}}}}` |
 | `poll.method` | `"GET"` |
@@ -79,7 +81,7 @@
 
 ## 兼容边界
 
-接口依据：https://86bdknokqu.apifox.cn/9260936m0 。配置渠道 Base URL 为 https://apimodel.aihubkit.com（已有 /v1 后缀也可由宿主合并），在模型设置中选择 AIHubKit Video。不要选择 Agnes、OpenAI Videos multipart 或其他 JSON profile。所有参考素材必须为公网可访问的 HTTPS URL；requiresPublicMediaUrls 让宿主使用已配置的公网素材存储，插件不自动向第三方图床上传素材。当前文档未明确首尾帧的字段名，因此显式首尾帧输入会在提交前失败，不将其转换为参考图。模型的分辨率、时长、素材数量上限以渠道实际支持为准。queued/unknown 保持等待，in_progress 映射为处理中，completed 映射为成功，failed 保持失败。完成后的 url 指向鉴权下载端点，宿主只向同源地址附加凭证并持久化视频；未返回 url 时使用同一任务的 /content 端点。未执行真实付费生成验收。
+使用中转站 /v1/videos JSON 协议。渠道 Base URL 来自绑定品牌的 api_server_address。首帧、尾帧映射为 first_image、last_image，不混入 referenceImages；参考图片、视频和音频分别映射为 referenceImages、referenceVideos、referenceAudios。协议未定义遮罩角色，不能静默丢弃或改作参考图。requiresPublicMediaUrls 让宿主使用已配置的公网素材存储；素材格式、数量、时长、分辨率及首尾帧与参考图组合限制由服务端校验。queued/unknown 保持等待，in_progress 映射为处理中，completed 映射为成功，failed 保持失败。完成后的 url 指向鉴权下载端点，宿主只向同源地址附加凭证并持久化视频；未返回 url 时使用同一任务的 /content 端点。
 
 <!-- BEEFTV_PLUGIN_MANIFEST_START -->
 ## Manifest 完整接口定义
@@ -90,10 +92,10 @@
 {
   "apiVersion": "beeftv.plugin/v2",
   "id": "aihubkit-video",
-  "name": "AIHubKit Video",
-  "version": "1.0.0",
+  "name": "{{productName}} Video",
+  "version": "1.0.1",
   "author": "BeefTV Contributors",
-  "description": "AIHubKit Video 独立请求协议插件。",
+  "description": "{{productName}} Video 独立请求协议插件。",
   "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
   "permissions": [
     "generation.run",
@@ -113,7 +115,7 @@
     "providers": [
       {
         "id": "aihubkit-video",
-        "label": "AIHubKit Video",
+        "label": "{{productName}} Video",
         "capabilities": [
           "video"
         ],
@@ -170,8 +172,8 @@
             "name": "images",
             "type": "media[]",
             "required": false,
-            "mapping": "referenceImages",
-            "description": "参考图片的公网 HTTPS URL，按素材顺序发送。"
+            "mapping": "first_image / last_image / referenceImages",
+            "description": "首帧、尾帧分别传递；其余参考图片按素材顺序发送。"
           },
           {
             "name": "videos",
@@ -189,62 +191,6 @@
           }
         ],
         "validations": [
-          {
-            "assert": {
-              "$gt": [
-                {
-                  "$len": {
-                    "$trim": {
-                      "$ref": "request.model"
-                    }
-                  }
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 必须选择模型"
-          },
-          {
-            "assert": {
-              "$gt": [
-                {
-                  "$len": {
-                    "$trim": {
-                      "$ref": "request.prompt"
-                    }
-                  }
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 提示词不能为空"
-          },
-          {
-            "assert": {
-              "$gt": [
-                {
-                  "$ref": "request.duration"
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 时长必须为正整数"
-          },
-          {
-            "assert": {
-              "$gt": [
-                {
-                  "$len": {
-                    "$trim": {
-                      "$ref": "request.resolution"
-                    }
-                  }
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 必须选择分辨率"
-          },
           {
             "assert": {
               "$eq": [
@@ -267,6 +213,8 @@
                               ]
                             },
                             [
+                              "first_frame",
+                              "last_frame",
                               "reference_image",
                               "subject_reference",
                               "style_reference"
@@ -280,193 +228,7 @@
                 0
               ]
             },
-            "message": "AIHubKit Video 当前接口文档仅明确参考图字段，请使用参考图片，勿设置首尾帧或遮罩"
-          },
-          {
-            "assert": {
-              "$eq": [
-                {
-                  "$len": {
-                    "$filter": {
-                      "from": {
-                        "$ref": "request.images"
-                      },
-                      "as": "media",
-                      "where": {
-                        "$not": {
-                          "$and": [
-                            {
-                              "$eq": [
-                                {
-                                  "$at": [
-                                    {
-                                      "$split": [
-                                        {
-                                          "$ref": "media.value"
-                                        },
-                                        "://"
-                                      ]
-                                    },
-                                    0
-                                  ]
-                                },
-                                "https"
-                              ]
-                            },
-                            {
-                              "$gt": [
-                                {
-                                  "$len": {
-                                    "$at": [
-                                      {
-                                        "$split": [
-                                          {
-                                            "$ref": "media.value"
-                                          },
-                                          "://"
-                                        ]
-                                      },
-                                      1
-                                    ]
-                                  }
-                                },
-                                0
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    }
-                  }
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 参考素材必须使用公网 HTTPS URL，请先配置公网素材存储"
-          },
-          {
-            "assert": {
-              "$eq": [
-                {
-                  "$len": {
-                    "$filter": {
-                      "from": {
-                        "$ref": "request.videos"
-                      },
-                      "as": "media",
-                      "where": {
-                        "$not": {
-                          "$and": [
-                            {
-                              "$eq": [
-                                {
-                                  "$at": [
-                                    {
-                                      "$split": [
-                                        {
-                                          "$ref": "media.value"
-                                        },
-                                        "://"
-                                      ]
-                                    },
-                                    0
-                                  ]
-                                },
-                                "https"
-                              ]
-                            },
-                            {
-                              "$gt": [
-                                {
-                                  "$len": {
-                                    "$at": [
-                                      {
-                                        "$split": [
-                                          {
-                                            "$ref": "media.value"
-                                          },
-                                          "://"
-                                        ]
-                                      },
-                                      1
-                                    ]
-                                  }
-                                },
-                                0
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    }
-                  }
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 参考素材必须使用公网 HTTPS URL，请先配置公网素材存储"
-          },
-          {
-            "assert": {
-              "$eq": [
-                {
-                  "$len": {
-                    "$filter": {
-                      "from": {
-                        "$ref": "request.audios"
-                      },
-                      "as": "media",
-                      "where": {
-                        "$not": {
-                          "$and": [
-                            {
-                              "$eq": [
-                                {
-                                  "$at": [
-                                    {
-                                      "$split": [
-                                        {
-                                          "$ref": "media.value"
-                                        },
-                                        "://"
-                                      ]
-                                    },
-                                    0
-                                  ]
-                                },
-                                "https"
-                              ]
-                            },
-                            {
-                              "$gt": [
-                                {
-                                  "$len": {
-                                    "$at": [
-                                      {
-                                        "$split": [
-                                          {
-                                            "$ref": "media.value"
-                                          },
-                                          "://"
-                                        ]
-                                      },
-                                      1
-                                    ]
-                                  }
-                                },
-                                0
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    }
-                  }
-                },
-                0
-              ]
-            },
-            "message": "AIHubKit Video 参考素材必须使用公网 HTTPS URL，请先配置公网素材存储"
+            "message": "{{productName}} Video 无法传递所选图片角色，请使用首帧、尾帧或参考图片"
           }
         ],
         "create": {
@@ -523,12 +285,98 @@
                 }
               }
             },
+            "first_image": {
+              "$omitEmpty": {
+                "$first": {
+                  "$map": {
+                    "from": {
+                      "$filter": {
+                        "from": {
+                          "$sortByOrder": {
+                            "$ref": "request.images"
+                          }
+                        },
+                        "as": "media",
+                        "where": {
+                          "$in": [
+                            {
+                              "$ref": "media.role"
+                            },
+                            [
+                              "first_frame"
+                            ]
+                          ]
+                        }
+                      }
+                    },
+                    "as": "media",
+                    "in": {
+                      "$ref": "media.value"
+                    }
+                  }
+                }
+              }
+            },
+            "last_image": {
+              "$omitEmpty": {
+                "$first": {
+                  "$map": {
+                    "from": {
+                      "$filter": {
+                        "from": {
+                          "$sortByOrder": {
+                            "$ref": "request.images"
+                          }
+                        },
+                        "as": "media",
+                        "where": {
+                          "$in": [
+                            {
+                              "$ref": "media.role"
+                            },
+                            [
+                              "last_frame"
+                            ]
+                          ]
+                        }
+                      }
+                    },
+                    "as": "media",
+                    "in": {
+                      "$ref": "media.value"
+                    }
+                  }
+                }
+              }
+            },
             "referenceImages": {
               "$omitEmpty": {
                 "$map": {
                   "from": {
-                    "$sortByOrder": {
-                      "$ref": "request.images"
+                    "$filter": {
+                      "from": {
+                        "$sortByOrder": {
+                          "$ref": "request.images"
+                        }
+                      },
+                      "as": "media",
+                      "where": {
+                        "$in": [
+                          {
+                            "$coalesce": [
+                              {
+                                "$ref": "media.role"
+                              },
+                              "reference_image"
+                            ]
+                          },
+                          [
+                            "reference_image",
+                            "subject_reference",
+                            "style_reference"
+                          ]
+                        ]
+                      }
                     }
                   },
                   "as": "media",

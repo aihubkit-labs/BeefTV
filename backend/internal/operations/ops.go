@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"infinite-canvas/backend/internal/buildinfo"
 	"strings"
 	"time"
 
@@ -306,7 +307,7 @@ func opCanvasGenerationPropose(ctx *Context, params json.RawMessage) (any, error
 				"approval":   "owner-required",
 				"proposalId": proposalID,
 				"params":     map[string]any{"canvasId": args.CanvasID, "proposalId": proposalID, "nodeIds": nodeIDs, "kind": args.Kind, "expectedRevision": doc["revision"], "expectedModelConfigRevision": resolved.Revision},
-				"message":    "生成单已开出（待人工批准）。请在 BeefTV 界面确认，或在终端运行 `beeftv approve " + proposalID + "` 批准并执行；Agent 自身凭据不能自批。",
+				"message":    buildinfo.DisplayText("生成单已开出（待人工批准）。请在 {{productName}} 界面确认，或在终端运行 `beeftv approve ") + proposalID + "` 批准并执行；Agent 自身凭据不能自批。",
 			}
 		} else {
 			result["nextAction"] = map[string]any{

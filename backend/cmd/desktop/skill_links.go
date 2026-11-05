@@ -68,7 +68,7 @@ func validSkillWebsite(raw string) bool {
 
 func (a *DesktopApp) OpenSkillMarketURL(raw string) error {
 	if !validSkillWebsite(raw) {
-		return fmt.Errorf("只能打开 BeefTV 技能页面")
+		return fmt.Errorf("只能打开技能市场页面")
 	}
 	ctx, err := a.dialogContext()
 	if err != nil {

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"encoding/json"
+	"infinite-canvas/backend/internal/buildinfo"
 	"strings"
 
 	"infinite-canvas/backend/internal/model"
@@ -34,7 +35,7 @@ func (r *Repository) ProjectExportResourceReferences(userID string, resourceIDs 
 		if !wanted[id] || receipt.StorageKey != "resource:"+id {
 			continue
 		}
-		references = append(references, ResourceDirectReference{Kind: "工程导出", ID: record.OpID, Title: "BeefTV 工程", ResourceID: id})
+		references = append(references, ResourceDirectReference{Kind: "工程导出", ID: record.OpID, Title: buildinfo.DisplayText("{{productName}} 工程"), ResourceID: id})
 	}
 	return references, nil
 }

@@ -111,6 +111,7 @@ type RegistryRecord struct {
 }
 
 func manifestView(raw []byte, metadata protocol.Metadata, source string) ManifestView {
+	metadata = protocol.PresentMetadata(metadata)
 	var manifest protocol.Manifest
 	_ = json.Unmarshal(raw, &manifest)
 	if manifest.Metadata.ID == "" {

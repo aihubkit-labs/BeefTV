@@ -1,6 +1,24 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"infinite-canvas/backend/internal/buildinfo"
+)
+
+func TestDesktopBrandUsesItsSkillSchemeAndDisplayName(t *testing.T) {
+	original := buildinfo.ProductScheme
+	t.Cleanup(func() { buildinfo.ProductScheme = original; buildinfo.SetDisplayName("") })
+	buildinfo.ProductScheme = "zmodeltv"
+	buildinfo.SetDisplayName("ZModelTV")
+	if err := validateDesktopArgs([]string{"zmodeltv://skills/install?id=storyboard&version=r_123"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDesktopArgs([]string{"mcp"}); err == nil || !strings.Contains(err.Error(), "ZModelTV") {
+		t.Fatal(err)
+	}
+}
 
 func TestDesktopRejectsCLICommands(t *testing.T) {
 	for _, args := range [][]string{{"mcp", "serve"}, {"ops", "--json"}, {"canvas", "get"}, {"client", "register"}, {"unknown-command"}, {"--json", "mcp", "serve"}} {

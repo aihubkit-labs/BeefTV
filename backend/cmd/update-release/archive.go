@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	macBundleName     = buildinfo.DataDirectory + ".app"
+	macBundleName     = buildinfo.ProductName + ".app"
 	linuxBundleName   = buildinfo.DataDirectory + "-linux"
 	windowsExecutable = buildinfo.DataDirectory + ".exe"
 )
