@@ -10,5 +10,6 @@ export const ProductPresentationContext = createContext<{
     contacts?: { website: string; qrImage: string; openWebsite: () => void };
     staticVersion?: boolean;
     hideBuiltinChannel?: boolean;
+    hideCliInstallInstructions?: boolean;
 }>({});
 export const useProductPresentation = () => useContext(ProductPresentationContext);

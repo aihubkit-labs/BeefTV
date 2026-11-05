@@ -148,12 +148,23 @@ def build(directory, target):
     values = environment(directory)
     config = ROOT / 'backend/cmd/desktop/wails.json'
     original = config.read_bytes()
+    index = ROOT / 'web/index.html'
+    original_index = index.read_bytes()
+    html = original_index.decode('utf-8')
+    head_end = re.search(r'</head\s*>', html, re.I)
+    if not head_end:
+        raise ValueError('Frontend entry must contain a head element for the bundled brand logo')
     public = ROOT / 'web/public/aihubkit-brand'
     if public.exists():
         raise ValueError('Generated brand assets already exist; use a clean build checkout')
     public.mkdir()
     try:
         shutil.copy2(directory / 'logo.png', public / 'logo.png')
+        shutil.copy2(ROOT / 'web/src/integrations/aihubkit/brand-loading.css', public / 'loading.css')
+        # A render-blocking head stylesheet covers the first paint before React or login.
+        # Keep the upstream HTML and shared loaders unchanged outside branded builds.
+        loading = '<link rel="preload" as="image" href="/aihubkit-brand/logo.png">\n<link rel="stylesheet" href="/aihubkit-brand/loading.css">\n'
+        index.write_text(html[:head_end.start()] + loading + html[head_end.start():], encoding='utf-8')
         settings = json.loads(original)
         settings['info']['productName'] = values['BEEFTV_PRODUCT_NAME']
         settings['info']['protocols'] = [{'scheme': values['BEEFTV_PACKAGE_ID'], 'description': values['BEEFTV_PRODUCT_NAME'] + ' skill link', 'role': 'Viewer'}]
@@ -176,8 +187,13 @@ def build(directory, target):
         elif target.startswith('linux/'):
             (out / 'BeefTV-linux').rename(out / (values['BEEFTV_INSTALL_NAME']+'-linux'))
     finally:
-        config.write_bytes(original)
-        shutil.rmtree(public)
+        try:
+            config.write_bytes(original)
+        finally:
+            try:
+                index.write_bytes(original_index)
+            finally:
+                shutil.rmtree(public)
 
 
 def main():

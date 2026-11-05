@@ -4,6 +4,7 @@ import { App, Button, Popconfirm } from "antd";
 import { Plug } from "lucide-react";
 import { useState } from "react";
 
+import { useProductPresentation } from "@/components/brand/product-presentation";
 import { PageHeader, WorkspacePage } from "@/components/layout/workspace-page";
 import { EmptyState } from "@/components/ui/product/empty-state";
 import { useCopyText } from "@/hooks/use-copy-text";
@@ -17,6 +18,7 @@ const AGENT_CLIENTS_QUERY_KEY = ["agent-clients"] as const;
 
 export default function AgentsPage() {
     const brandName = useAppearanceStore((state) => state.appearance.brandName);
+    const { hideCliInstallInstructions } = useProductPresentation();
     const { message } = App.useApp();
     const copyText = useCopyText();
     const [connecting, setConnecting] = useState<AgentClientKind | null>(null);
@@ -90,7 +92,7 @@ export default function AgentsPage() {
                         })}
                     </div>
                     {cli && !cli.available ? <p role="alert" className="mt-4 text-sm text-foreground/60">安装文件不完整，无法连接外部工具。请重新下载并完整解压 {brandName}。</p> : null}
-                    {cli?.available ? <details className="agent-cli-details"><summary>命令行工具</summary><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-foreground/55">在终端使用 beeftv 命令</p><Button size="small" onClick={() => copyText(cli.installCommand)}>复制安装命令</Button></div></details> : null}
+                    {cli?.available && !hideCliInstallInstructions ? <details className="agent-cli-details"><summary>命令行工具</summary><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-foreground/55">在终端使用 beeftv 命令</p><Button size="small" onClick={() => copyText(cli.installCommand)}>复制安装命令</Button></div></details> : null}
                 </div>
             )}
 

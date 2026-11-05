@@ -1,0 +1,8 @@
+/* Copied into branded packages and loaded in the document head before first paint. */
+#root:empty::after,
+.beeftv-loading-logo {
+    background: var(--aihubkit-loading-logo, url("./logo.png")) center / contain no-repeat;
+    -webkit-mask: none;
+    mask: none;
+    animation: none;
+}

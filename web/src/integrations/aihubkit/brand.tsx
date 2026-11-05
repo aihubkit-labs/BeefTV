@@ -56,6 +56,7 @@ export function HubBrandProvider({ children }: { children: ReactNode }) {
                 const previous = useAppearanceStore.getState().appearance;
                 const logoUrl = remote ? await availableLogo(value.logoUrl, previous.logoUrl) : value.bundledLogo || value.logoUrl;
                 if (cancelled) return;
+                document.documentElement.style.setProperty("--aihubkit-loading-logo", `url(${JSON.stringify(logoUrl)})`);
                 setBrand(value);
                 setModelProtocolPresentation({ "aihubkit-video": `${value.platformName} Video` });
                 commitPublicAppearance({ ...previous, brandName: value.appName, brandSlug: value.id, seoTitle: value.appName, seoDescription: `${value.appName}，AI 影视创作工作台。`, footerCopyright: `© ${new Date().getFullYear()} ${value.appName}`, logoUrl, darkLogoUrl: logoUrl, logoConfigured: true, darkLogoConfigured: true, logoFrameEnabled: false, configured: true });
@@ -67,10 +68,21 @@ export function HubBrandProvider({ children }: { children: ReactNode }) {
         const onFocus = () => { void refresh(true); };
         const timer = window.setInterval(onFocus, 60_000);
         window.addEventListener("focus", onFocus);
-        return () => { cancelled = true; clearInterval(timer); window.removeEventListener("focus", onFocus); setModelProtocolPresentation({}); };
+        return () => { cancelled = true; clearInterval(timer); window.removeEventListener("focus", onFocus); document.documentElement.style.removeProperty("--aihubkit-loading-logo"); setModelProtocolPresentation({}); };
     }, [attempt]);
     if (failed) return <WorkspaceErrorState title="无法读取品牌信息" description="请重试连接本地工作台。" onRetry={() => { setFailed(false); setAttempt((v) => v + 1); }} />;
     if (!brand) return <FullScreenLoader label="正在打开工作台" />;
     const openWebsite = () => { const open = native()?.BrowserOpenURL; if (open) open(brand.websiteUrl); else window.open(brand.websiteUrl, "_blank", "noopener,noreferrer"); };
-    return <BrandContext.Provider value={brand}><ProductPresentationContext.Provider value={brand.id ? { contacts: { website: brand.websiteUrl, qrImage: brand.wechatUrl, openWebsite }, staticVersion: true, hideBuiltinChannel: true } : { staticVersion: true, hideBuiltinChannel: true }}>{children}</ProductPresentationContext.Provider></BrandContext.Provider>;
+    return (
+        <BrandContext.Provider value={brand}>
+            <ProductPresentationContext.Provider value={{
+                staticVersion: true,
+                hideBuiltinChannel: true,
+                hideCliInstallInstructions: true,
+                ...(brand.id ? { contacts: { website: brand.websiteUrl, qrImage: brand.wechatUrl, openWebsite } } : {}),
+            }}>
+                {children}
+            </ProductPresentationContext.Provider>
+        </BrandContext.Provider>
+    );
 }

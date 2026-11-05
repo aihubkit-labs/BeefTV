@@ -92,7 +92,9 @@ export function WorkspaceSidebarUpdate({ collapsed }: { collapsed: boolean }) {
 
     return (
         <div className={cn("app-workspace-update", collapsed && "is-collapsed")} data-desktop-update-status={state.status} data-desktop-update-runtime={runtime}>
-            {staticVersion ? <span className="text-xs text-foreground/60 tabular-nums" title={`${brandName}-${installed}`}>{brandName}-{installed}</span> : <AppChangelogButton className="app-workspace-update-version" showIcon={false} showVersion version={installed} versionClassName="tabular-nums" ariaLabel={installed ? `当前版本 ${installed}，查看更新日志` : "查看更新日志"} />}
+            {staticVersion ? (!collapsed && <span className="col-span-3 flex min-h-9 min-w-0 items-center overflow-hidden whitespace-nowrap pl-2.5 text-xs text-foreground/60 tabular-nums" title={`${brandName}-${installed}`}>
+                <span className="truncate">{brandName}</span><span className="shrink-0">-{installed}</span>
+            </span>) : <AppChangelogButton className="app-workspace-update-version" showIcon={false} showVersion version={installed} versionClassName="tabular-nums" ariaLabel={installed ? `当前版本 ${installed}，查看更新日志` : "查看更新日志"} />}
                 <Popover open={collapsed && Boolean(line)} content={collapsed ? statusContent : null} placement="rightBottom" arrow={false} rootClassName="app-workspace-update-popover">
                 <div className="app-workspace-update-progress" role="status" aria-live="polite">
                     {!line ? <span className="sr-only">{updateLabel}</span> : null}
