@@ -16,14 +16,26 @@ class UploadedAssetsTests(unittest.TestCase):
             self.assertEqual(notes, 'CustomerTV: `CustomerTV.zip`')
             self.assertEqual((root / 'SHA256SUMS.txt').read_text(), digest + '  CustomerTV.zip\n')
 
-    def test_normalized_name_blocks_publication_even_when_bytes_match(self):
+    def test_normalized_name_updates_download_references_and_preserves_brand(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / '客户 TV.zip').write_bytes(b'fixture')
-            asset = dict(name='TV.zip', digest='sha256:' + hashlib.sha256(b'fixture').hexdigest(), size=7, state='uploaded')
-            with self.assertRaisesRegex(ValueError, 'filenames differ'):
-                reconcile(root, [asset], '客户 TV: `客户 TV.zip`')
-            self.assertFalse((root / 'SHA256SUMS.txt').exists())
+            digest = hashlib.sha256(b'fixture').hexdigest()
+            asset = dict(name='TV.zip', digest='sha256:' + digest, size=7, state='uploaded')
+            notes = reconcile(root, [asset], '客户 TV: `客户 TV.zip`')
+            self.assertEqual(notes, '客户 TV: `TV.zip`')
+            self.assertEqual((root / 'SHA256SUMS.txt').read_text(), digest + '  TV.zip\n')
+
+    def test_renaming_must_not_hide_a_missing_brand_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '品牌一TV.zip').write_bytes(b'first')
+            (root / '品牌二TV.zip').write_bytes(b'second')
+            first = dict(name='first-TV.zip', digest='sha256:' + hashlib.sha256(b'first').hexdigest(), size=5, state='uploaded')
+            for assets in [[first], [first, dict(first, name='second-TV.zip')], [first, dict(first)]]:
+                with self.subTest(assets=assets), self.assertRaises(ValueError):
+                    reconcile(root, assets, '')
+                self.assertFalse((root / 'SHA256SUMS.txt').exists())
 
     def test_missing_corrupted_or_incomplete_upload_blocks_publication(self):
         with tempfile.TemporaryDirectory() as directory:

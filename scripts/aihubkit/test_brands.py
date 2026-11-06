@@ -50,12 +50,12 @@ class BrandTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 brands.metadata(self.entry, {'success': True, 'data': data})
 
-    def test_release_rejects_names_that_github_would_change(self):
-        for name in ['ZModelTV', 'shanzhuTV', 'Brand-1_Studio.TV']:
-            brands.validate_release_name(dict(self.entry, artifactName=name))
-        for name in ['客户平台TV', 'Brand StudioTV', 'Brand+TV']:
-            with self.assertRaisesRegex(ValueError, 'GitHub Release'):
-                brands.validate_release_name(dict(self.entry, artifactName=name))
+    def test_application_and_artifact_names_preserve_unicode_spaces_and_symbols(self):
+        for name in ['ZModel', '客户平台', 'Brand Studio', 'Brand+']:
+            with self.subTest(name=name):
+                value = brands.metadata(self.entry, {'success': True, 'data': dict(self.data, system_name=name)})
+                self.assertEqual(value['appName'], name + 'TV')
+                self.assertEqual(value['artifactName'], name + 'TV')
 
     def test_registry_rejects_duplicate_ids_or_origins(self):
         with tempfile.TemporaryDirectory() as directory:

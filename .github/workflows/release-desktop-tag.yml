@@ -43,7 +43,7 @@ jobs:
         id: brands
         run: |
           python -m pip install Pillow==11.3.0
-          python scripts/aihubkit/brands.py snapshot --github-release --output brand-snapshots > "$RUNNER_TEMP/brand-ids.json"
+          python scripts/aihubkit/brands.py snapshot --output brand-snapshots > "$RUNNER_TEMP/brand-ids.json"
           echo "ids=$(cat "$RUNNER_TEMP/brand-ids.json")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:

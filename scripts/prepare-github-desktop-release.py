@@ -98,10 +98,8 @@ def main():
     args = parser.parse_args()
     brands = None
     if args.brands:
-        from aihubkit.brands import registry, validate_release_name
+        from aihubkit.brands import registry
         brands = json.loads(args.brands.read_text(encoding='utf-8'))['brands']
-        for brand in brands:
-            validate_release_name(brand)
         if {(b['id'], b['origin']) for b in brands} != {(b['id'], b['origin']) for b in registry()} or len(brands) != len(registry()):
             raise ValueError('Release snapshot must contain every operational brand exactly once')
         if len({b['artifactName'].casefold() for b in brands}) != len(brands):

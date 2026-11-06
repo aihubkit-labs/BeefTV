@@ -79,12 +79,7 @@ def download(url, limit):
     return body
 
 
-def validate_release_name(brand):
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', brand['artifactName']):
-        raise ValueError(f"{brand['id']}: GitHub Release would rewrite the filename; set system_name to English letters, digits, dots, underscores or hyphens before publishing")
-
-
-def snapshot(output, selected=None, *, github_release=False):
+def snapshot(output, selected=None):
     from PIL import Image, ImageOps
     brands = registry()
     if selected:
@@ -94,8 +89,6 @@ def snapshot(output, selected=None, *, github_release=False):
     resolved, names = [], set()
     for entry in brands:
         brand = metadata(entry, json.loads(download(entry['origin'] + '/api/status', 1 << 20)))
-        if github_release:
-            validate_release_name(brand)
         if brand['artifactName'].casefold() in names:
             raise ValueError('Brands returned duplicate application names; correct domain branding before release')
         names.add(brand['artifactName'].casefold())
@@ -213,7 +206,6 @@ def main():
     p = sub.add_parser('snapshot')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--brand')
-    p.add_argument('--github-release', action='store_true')
     p = sub.add_parser('env')
     p.add_argument('--snapshot', type=Path, required=True)
     p.add_argument('--github-env', type=Path, required=True)
@@ -222,7 +214,7 @@ def main():
     p.add_argument('--target', required=True, choices=['darwin/arm64', 'darwin/amd64', 'windows/amd64', 'linux/amd64'])
     args = parser.parse_args()
     if args.command == 'snapshot':
-        result = snapshot(args.output, args.brand, github_release=args.github_release)
+        result = snapshot(args.output, args.brand)
         print(json.dumps([x['id'] for x in result]))
     elif args.command == 'env':
         with args.github_env.open('a', encoding='utf-8') as stream:
